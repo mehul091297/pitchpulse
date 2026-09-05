@@ -38,7 +38,7 @@ Goes one step past most student analytics projects: it doesn't just describe wha
 - [x] Core dashboard live — season-safe price/demand charts + squad recommendation tab
 - [x] Agent pipeline v1 running end to end (`src/agents/crew.py` — Ingest -> Analyst -> Report agents verified via a real Colab run, all 3 agents/tasks completing successfully on real data; caught and fixed a tie-break bug in the price-movers tool along the way)
 - [x] Forecasting wired in (`forecast_points()` — verified against real data)
-- [x] Anomaly detection wired in (`anomaly_scores()` — per-player rolling z-score on price change and transfer swings, wired into the crew as a new tool; verified with synthetic tests, not yet run against real live data)
+- [x] Anomaly detection wired in (`anomaly_scores()` — per-player rolling z-score on price change and transfer swings, wired into the crew as a new tool; verified with synthetic tests and a real Colab run — correctly reports 'not enough history yet' this early in 2026-27 instead of fabricating a result)
 - [x] Squad optimizer wired in (`recommend_squad()` — verified against real data, matches deployed dashboard output)
 - [x] Deployed — live at https://pitchpulse-bs7uhkkyuchigcpnxupi29.streamlit.app/
 - [ ] Demo recorded
