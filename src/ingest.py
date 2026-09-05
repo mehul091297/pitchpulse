@@ -121,6 +121,35 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     df["price_m"] = df["value"] / 10  # tenths of £m -> £m, easier to read on charts
     gw_col = "round" if "round" in df.columns else "GW"
     df = df.rename(columns={gw_col: "gameweek"})
+
+    # Drop "ghost" player-seasons: a player with zero minutes across every
+    # gameweek of a season never actually featured in the Premier League
+    # that year. Verified against real data (Mehul caught this) — Harry
+    # Kane has 36 rows in the 2023-24 archive, one per gameweek, every one
+    # with minutes=0 and total_points=0, price frozen at a single value the
+    # entire season, and 'selected' (ownership) steadily decaying as
+    # managers gradually sold a player who was never going to play — he'd
+    # already transferred to Bayern Munich before the season kicked off.
+    # This is a leftover entry in the source archive (FPL's game database
+    # hadn't fully dropped him yet when the season's squads locked in), not
+    # a bug in this pipeline — but leaving it in would make a departed
+    # player show up as a "top priced player" in the dashboard's default
+    # chart selection, and would (harmlessly, since his 'code' won't match
+    # any current player, but still uselessly) pollute the cold-start
+    # average pool in forecast_points(). Filtered per (code, season): a
+    # player who didn't feature at all in ONE season but did in others
+    # only loses that one season's rows, not their whole history.
+    # Group by (code, season), falling back to name for the rare row whose
+    # code never mapped (see _load_code_map) — plain groupby(["code", ...])
+    # would otherwise merge every NaN-code row into one shared bucket
+    # (pandas' default dropna=True drops them from transform() entirely,
+    # leaving NaN, which `> 0` reads as False and would wrongly drop a real
+    # active player just for lacking a code; dropna=False merges *different*
+    # unmapped players' minutes together instead, which is equally wrong).
+    group_key = df["code"].fillna(df["name"])
+    minutes_by_player_season = df.groupby([group_key, "season"])["minutes"].transform("sum")
+    df = df[minutes_by_player_season > 0]
+
     return df
 
 

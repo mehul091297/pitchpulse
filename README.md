@@ -2,6 +2,8 @@
 
 An agentic analytics pipeline for English Premier League pricing markets — a Business Analytics portfolio project.
 
+**Live dashboard:** https://pitchpulse-bs7uhkkyuchigcpnxupi29.streamlit.app/
+
 Full project plan, architecture diagram, and phased roadmap: see the plan artifact shared alongside this repo (or rebuild it from `plan.html` in this folder).
 
 ## What this is
@@ -32,12 +34,14 @@ Goes one step past most student analytics projects: it doesn't just describe wha
 ## Status
 
 - [x] Dataset track chosen — Track A: FPL price market
-- [ ] Data ingested into `data/processed/pitchpulse.db`
-- [ ] Core dashboard live
-- [ ] Agent pipeline v1 running end to end
-- [ ] Forecasting + anomaly detection wired in
-- [ ] Squad optimizer wired in (`recommend_squad()` — implemented, needs real ingested data to run against)
-- [ ] Deployed + demo recorded
+- [x] Data ingested into `data/processed/pitchpulse.db` (2 historical seasons + live 2026-27 snapshots, joined on FPL's stable player `code`)
+- [x] Core dashboard live — season-safe price/demand charts + squad recommendation tab
+- [ ] Agent pipeline v1 running end to end (CrewAI orchestration itself — `src/agents/crew.py` — still a stub; the underlying tools it will wrap are done and verified)
+- [x] Forecasting wired in (`forecast_points()` — verified against real data)
+- [ ] Anomaly detection wired in (`anomaly_scores()` — not started)
+- [x] Squad optimizer wired in (`recommend_squad()` — verified against real data, matches deployed dashboard output)
+- [x] Deployed — live at https://pitchpulse-bs7uhkkyuchigcpnxupi29.streamlit.app/
+- [ ] Demo recorded
 
 ## Setup
 
@@ -54,11 +58,13 @@ Copy `.env.example` to `.env` and fill in your LLM API key before running the ag
 ```
 data/raw/          # untouched source files (gitignored — download per the dataset links above)
 data/processed/    # cleaned tables / sqlite db (gitignored)
-src/ingest.py      # raw files -> clean SQLite tables
+src/ingest.py      # historical raw files -> clean SQLite tables
+src/live_ingest.py # this season's live snapshot, straight from the official FPL API
+src/bootstrap.py   # one-call ensure_data(): downloads + ingests + snapshots — what the deployed dashboard runs on a fresh checkout
 src/db.py          # SQLite connection helper
 src/analysis.py    # trend, points forecast, squad optimizer (PuLP), anomaly-score functions
 src/agents/crew.py # CrewAI pipeline: Ingest -> Analyst -> Report agents
-dashboard/app.py   # Streamlit + Plotly dashboard
+dashboard/app.py   # Streamlit + Plotly dashboard (season-safe trends + squad recommendation)
 reports/           # generated narrative reports land here
 ```
 
