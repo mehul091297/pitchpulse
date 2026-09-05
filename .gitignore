@@ -9,3 +9,4 @@ data/processed/*
 reports/*
 !reports/.gitkeep
 .DS_Store
+*.zip
