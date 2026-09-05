@@ -36,7 +36,7 @@ Goes one step past most student analytics projects: it doesn't just describe wha
 - [x] Dataset track chosen — Track A: FPL price market
 - [x] Data ingested into `data/processed/pitchpulse.db` (2 historical seasons + live 2026-27 snapshots, joined on FPL's stable player `code`)
 - [x] Core dashboard live — season-safe price/demand charts + squad recommendation tab
-- [ ] Agent pipeline v1 running end to end (CrewAI orchestration itself — `src/agents/crew.py` — still a stub; the underlying tools it will wrap are done and verified)
+- [x] Agent pipeline v1 running end to end (`src/agents/crew.py` — Ingest -> Analyst -> Report agents verified via a real Colab run, all 3 agents/tasks completing successfully on real data; caught and fixed a tie-break bug in the price-movers tool along the way)
 - [x] Forecasting wired in (`forecast_points()` — verified against real data)
 - [ ] Anomaly detection wired in (`anomaly_scores()` — not started)
 - [x] Squad optimizer wired in (`recommend_squad()` — verified against real data, matches deployed dashboard output)

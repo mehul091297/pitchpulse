@@ -7,6 +7,6 @@ scikit-learn>=1.4
 prophet>=1.1
 streamlit>=1.37
 plotly>=5.22
-crewai>=0.60
+crewai[anthropic,google-genai]>=0.60  # extras required for LLM(model="anthropic/...") / "gemini/..." — confirmed via real ImportErrors without them
 python-dotenv>=1.0
 pulp>=2.8
