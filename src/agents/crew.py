@@ -122,6 +122,43 @@ def demand_swings_tool(season: str = "") -> str:
     return "\n".join(lines)
 
 
+@tool("Get price/demand anomaly alerts")
+def anomaly_alerts_tool(season: str = "") -> str:
+    """Get player-gameweeks where a price change or transfer swing was
+    unusual FOR THAT SPECIFIC PLAYER, compared to their own recent
+    history — not a top-5/bottom-5 list, an alert list, so it can come
+    back with anywhere from zero to many entries depending on what
+    actually happened. Leave `season` blank for the most recent season.
+    A player needs a few prior gameweeks of history before this can say
+    what's normal for them, so don't be surprised if this returns
+    nothing at all early in a season — that means there's genuinely not
+    enough history yet, not that the tool failed.
+    """
+    from src.analysis import anomaly_scores
+
+    df = anomaly_scores(season=season or None)
+    if df.empty:
+        return (
+            "No anomalies flagged for that season. Either nothing unusual "
+            "has happened, or (very likely early in a season) there isn't "
+            "enough per-player history yet to tell what's normal for them "
+            "— don't report this as 'no anomalies detected', report it as "
+            "'not enough history yet to detect anomalies.'"
+        )
+
+    lines = [f"Anomaly alerts ({len(df)} flagged, most severe first):"]
+    for _, row in df.iterrows():
+        if row["metric"] == "price_change":
+            detail = f"price moved {row['value']:+.1f}m in gameweek {row['gameweek']}"
+        else:
+            detail = f"net transfers of {row['value']:+.0f} in gameweek {row['gameweek']}"
+        lines.append(
+            f"  {row['name']} ({row['team']}): {detail} "
+            f"— {abs(row['z_score']):.1f}x their normal week-to-week variation"
+        )
+    return "\n".join(lines)
+
+
 @tool("Recommend a squad")
 def recommend_squad_tool(budget: float = 100.0) -> str:
     """Build the budget-optimal 15-player squad for the current
@@ -196,17 +233,26 @@ def build_crew(budget: float = 100.0) -> Crew:
     analyst_agent = Agent(
         role="Football Data Analyst",
         goal=(
-            "Analyze price trends and transfer demand, and produce a "
-            "budget-optimal squad recommendation, with reasoning grounded "
-            "in the actual numbers your tools return."
+            "Analyze price trends, transfer demand, and player-specific "
+            "anomalies, and produce a budget-optimal squad recommendation, "
+            "with reasoning grounded in the actual numbers your tools "
+            "return."
         ),
         backstory=(
             "You're a Fantasy Premier League analyst who never states a "
             "number you haven't pulled from a tool. You explain WHY a "
             "pick makes sense (price versus predicted points), not just "
-            "what the optimizer chose."
+            "what the optimizer chose. You also know the difference "
+            "between 'nothing unusual happened' and 'there isn't enough "
+            "history yet to tell' when your anomaly tool comes back "
+            "empty, and you say which one it actually is."
         ),
-        tools=[price_movers_tool, demand_swings_tool, recommend_squad_tool],
+        tools=[
+            price_movers_tool,
+            demand_swings_tool,
+            anomaly_alerts_tool,
+            recommend_squad_tool,
+        ],
         llm=llm,
         verbose=True,
     )
@@ -240,17 +286,24 @@ def build_crew(budget: float = 100.0) -> Crew:
 
     analyze_task = Task(
         description=(
-            "Using the now-current data, pull the biggest price movers "
-            "and transfer demand swings for the most recent season, and "
-            "build a squad recommendation with a budget of £{budget}m. "
-            "Summarize your findings clearly, including WHY specific "
-            "picks make sense relative to their price."
+            "Using the now-current data, pull the biggest price movers, "
+            "transfer demand swings, and any player-specific anomaly "
+            "alerts for the most recent season, and build a squad "
+            "recommendation with a budget of £{budget}m. Summarize your "
+            "findings clearly, including WHY specific picks make sense "
+            "relative to their price. If the anomaly tool returns no "
+            "alerts, say plainly whether that's because nothing unusual "
+            "happened or because there isn't enough history yet — don't "
+            "blur the two together."
         ),
         expected_output=(
             "A structured summary covering: (1) notable price "
-            "risers/fallers, (2) notable transfer demand swings, (3) the "
-            "recommended 15-player squad with total predicted points and "
-            "total cost, with brief reasoning for a few standout picks."
+            "risers/fallers, (2) notable transfer demand swings, (3) any "
+            "anomaly alerts (player-specific price/demand moves well "
+            "outside that player's own normal range) and, if none, which "
+            "of the two honest reasons why, (4) the recommended 15-player "
+            "squad with total predicted points and total cost, with brief "
+            "reasoning for a few standout picks."
         ),
         agent=analyst_agent,
         context=[ingest_task],
@@ -263,8 +316,12 @@ def build_crew(budget: float = 100.0) -> Crew:
             "manager deciding their transfers this gameweek. Lead with "
             "the recommended squad's overall shape and budget, then the "
             "standout picks and why, then the notable price/demand "
-            "movers. Stay strictly grounded in the analyst's numbers — "
-            "never invent a reason they didn't give."
+            "movers, then any anomaly alerts as a short 'watch list' — "
+            "and if there are none, say plainly whether that's because "
+            "nothing unusual happened or because there isn't enough "
+            "history yet to tell, exactly as the analyst reported it. "
+            "Stay strictly grounded in the analyst's numbers — never "
+            "invent a reason they didn't give."
         ),
         expected_output="A short markdown report, ready to read as-is.",
         agent=report_agent,

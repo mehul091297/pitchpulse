@@ -38,8 +38,45 @@ from src.db import get_engine
 
 
 def _load_prices() -> pd.DataFrame:
+    """All rows from the 'prices' table, deduplicated to one row per
+    player-gameweek-season.
+
+    live_ingest.append_snapshot() is deliberately append-only (see its
+    docstring) — every time ensure_data_tool/ensure_data() runs (once per
+    crew run, and the dashboard's cached call periodically), it adds
+    ANOTHER row for the current gameweek rather than overwriting the
+    earlier one. Confirmed in practice, not just in theory: two separate
+    crew runs against the same gameweek (2026-27 GW2) each logged
+    "Appended N rows for 2026-27, gameweek 2" — so the real database now
+    has duplicate snapshots of that gameweek, one per run.
+
+    Left un-deduped, that's mostly harmless for a single-point read like
+    recommend_squad() (its own drop_duplicates just picks one snapshot,
+    close enough), but it would be actively wrong for anomaly_scores():
+    diffing between two same-gameweek re-ingests — taken minutes apart,
+    with transfers_in/out still accumulating within that gameweek's
+    window — would look exactly like a real week-over-week price/demand
+    swing and get flagged as a fabricated anomaly. Deduplicated here,
+    once, so every caller sees a clean series without needing its own
+    copy of this logic.
+
+    Keeps the most recently ingested row per (code-or-name, season,
+    gameweek) — ordered by kickoff_time, which live_ingest.py stamps
+    with the actual ingestion time (for historical rows it's the real
+    match kickoff time instead, but those already have zero duplicates
+    per (element, round, season) from ingest.py's own dedup, so which one
+    "wins" there is moot). Falls back to 'name' for the rare row whose
+    'code' never mapped, same reasoning as ingest.py's ghost-row filter.
+    """
     engine = get_engine()
-    return pd.read_sql("SELECT * FROM prices", engine)
+    df = pd.read_sql("SELECT * FROM prices", engine)
+    if not {"season", "gameweek"}.issubset(df.columns):
+        return df  # let callers' own _require_*_column raise a clearer error
+    df = df.copy()
+    df["_dedup_key"] = df["code"].fillna(df["name"]) if "code" in df.columns else df["name"]
+    df = df.sort_values("kickoff_time")
+    df = df.drop_duplicates(subset=["_dedup_key", "season", "gameweek"], keep="last")
+    return df.drop(columns=["_dedup_key"])
 
 
 def list_seasons() -> list[str]:
@@ -256,11 +293,106 @@ def recommend_squad(
     return squad, pulp.LpStatus[status]
 
 
-def anomaly_scores(threshold: float = 2.0) -> pd.DataFrame:
-    """Phase 4: flag player-gameweeks where transfers_balance or price
-    movement deviates sharply from that player's own recent baseline
-    (e.g. z-score over a rolling window). Output feeds directly into the
-    Report Agent's alerts — this is the signal a "price spike" report
-    line comes from.
+def anomaly_scores(
+    threshold: float = 2.0,
+    window: int = 5,
+    min_periods: int = 3,
+    season: str | None = None,
+    df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Phase 4: flag player-gameweeks where a price change or transfer
+    swing deviates sharply from that player's OWN recent baseline — not
+    from the league-wide average, since a £4.5m benchwarmer and a £15m
+    star have completely different normal ranges for both metrics.
+
+    For each metric — gameweek-over-gameweek price change, and
+    transfers_balance — this computes a rolling z-score against that
+    player's trailing history within the same season (grouped by 'code',
+    not 'name', for the same cross-season-identity reason every other
+    function here does; scoped to one season at a time so a summer
+    transfer/price reset never gets compared against last year's numbers).
+    The rolling mean/std are shifted by one gameweek first, so a
+    gameweek's own value can never leak into its own baseline — the same
+    look-ahead guard forecast_points() uses.
+
+    Two guards keep this from manufacturing false signal out of thin
+    data, the same failure mode price_movers_tool had before its fix:
+
+    - A player's first `min_periods` gameweeks of a season have no
+      reliable baseline yet (not enough history to say what's "normal"
+      for THEM specifically) — excluded rather than scored. This matters
+      most right now: early in 2026-27, nobody has enough in-season
+      history to clear this bar yet, so don't be surprised if this
+      returns empty against the live current season — that's the honest
+      answer, not a bug (see the "insufficient history" test case).
+    - A rolling std of exactly zero (a player whose price/demand was
+      perfectly constant every prior gameweek — common here, since FPL
+      prices sit flat for most players most weeks) can't be divided by
+      directly. That's NOT a reason to exclude these rows though: a
+      player who hasn't moved AT ALL in min_periods+ weeks and then
+      suddenly does is arguably the single clearest anomaly this
+      function can find, not one to suppress. A tiny epsilon floor on
+      the std turns "any deviation from a perfectly flat baseline" into
+      a very large (not infinite/NaN) z-score, capped at a sentinel
+      magnitude so it still sorts to the top without printing an
+      absurd number, while a value that stays exactly at the constant
+      still correctly scores z=0 — so a truly unchanged player is
+      never falsely flagged.
+
+    Returns one row per flagged player-gameweek-metric — an alerts
+    table, not the full history — sorted by severity (|z-score|
+    descending). Columns: code, name, team, season, gameweek, metric
+    ('price_change' or 'transfers_balance'), value, z_score. Empty
+    DataFrame (same columns, zero rows) if nothing clears the threshold.
+    Defaults to the most recent season present, like price_trend()/
+    demand_signal() — pass `season` explicitly to check another one.
     """
-    raise NotImplementedError("Implement in Phase 4.")
+    columns = ["code", "name", "team", "season", "gameweek", "metric", "value", "z_score"]
+    df = _load_prices() if df is None else df.copy()
+    _require_season_column(df)
+    _require_code_column(df)
+
+    season = season or df["season"].max()
+    season_df = df[df["season"] == season].sort_values(["code", "gameweek"]).copy()
+
+    # Anomalies live in the CHANGE, not the level: a player sitting at a
+    # flat £6.0m every week isn't news, but a sudden jump from £6.0m to
+    # £6.2m is. transfers_balance is already a per-gameweek net swing, so
+    # it needs no such transformation.
+    season_df["price_change"] = season_df.groupby("code")["price_m"].diff()
+
+    alerts = []
+    for metric in ("price_change", "transfers_balance"):
+        grouped = season_df.groupby("code")[metric]
+        baseline_mean = grouped.transform(
+            lambda s: s.shift(1).rolling(window, min_periods=min_periods).mean()
+        )
+        baseline_std = grouped.transform(
+            lambda s: s.shift(1).rolling(window, min_periods=min_periods).std()
+        )
+        epsilon = 1e-6  # far below any realistic price/transfer std, so a
+        # genuinely nonzero std is essentially unaffected by the floor.
+        safe_std = baseline_std.where(baseline_std > 0, epsilon)
+        z = (season_df[metric] - baseline_mean) / safe_std
+        # The epsilon floor makes a true zero-std baseline's z-score
+        # technically correct but absurdly large (a real deviation
+        # divided by 1e-6) — fine for ranking severity, useless as a
+        # number a report would print. Capped at a sentinel magnitude:
+        # still sorts above every "normal" std-based z-score, without
+        # printing something like "z-score: 49,900,000,000".
+        MAX_Z = 50.0
+        z = z.clip(lower=-MAX_Z, upper=MAX_Z)
+        has_baseline = baseline_std.notna()  # NaN = not enough history yet
+        flagged = season_df[has_baseline & z.notna() & (z.abs() >= threshold)].copy()
+        if flagged.empty:
+            continue
+        flagged["metric"] = metric
+        flagged["value"] = flagged[metric]
+        flagged["z_score"] = z.loc[flagged.index]
+        alerts.append(flagged[columns])
+
+    if not alerts:
+        return pd.DataFrame(columns=columns)
+
+    result = pd.concat(alerts, ignore_index=True)
+    return result.reindex(result["z_score"].abs().sort_values(ascending=False).index).reset_index(drop=True)
