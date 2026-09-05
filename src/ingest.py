@@ -39,9 +39,11 @@ Run with:
 import re
 from pathlib import Path
 import pandas as pd
-from src.db import get_engine
+from src.db import get_engine, REPO_ROOT
 
-RAW_DIR = Path("data/raw")
+# Anchored to the repo root (see src/db.py's REPO_ROOT), not to the
+# process's cwd — same reasoning as DEFAULT_DB_PATH there.
+RAW_DIR = REPO_ROOT / "data" / "raw"
 
 # Every merged_gw.csv you've downloaded, one per season. Matches the
 # seasons the Colab notebook's download cell fetches by default — if you

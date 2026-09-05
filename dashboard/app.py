@@ -14,6 +14,19 @@ src/analysis.py so the same functions can be reused by the Report Agent
 later without duplicating code.
 """
 
+import sys
+from pathlib import Path
+
+# Make the repo root importable regardless of the process's working
+# directory. `streamlit run dashboard/app.py` from the repo root happens
+# to put the repo root on sys.path anyway, which is why this worked in
+# Colab — but that's incidental, not guaranteed. Streamlit Community
+# Cloud runs the script without that guarantee, so `from src.analysis
+# import ...` below raised ModuleNotFoundError there even though the
+# exact same import worked locally. Doing this explicitly makes it
+# correct everywhere, not just where the cwd happens to line up.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import streamlit as st
 import plotly.express as px
 
