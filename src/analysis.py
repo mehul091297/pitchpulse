@@ -42,13 +42,43 @@ def _load_prices() -> pd.DataFrame:
     return pd.read_sql("SELECT * FROM prices", engine)
 
 
+def list_seasons() -> list[str]:
+    """Every season present in the 'prices' table, oldest first — for
+    populating a season picker (the dashboard's season selectbox uses
+    this directly).
+    """
+    df = _load_prices()
+    _require_season_column(df)
+    return sorted(df["season"].unique().tolist())
+
+
+def _season_filtered(df: pd.DataFrame, season: str | None) -> pd.DataFrame:
+    """Filter to one season, defaulting to the most recent one present.
+
+    Same collision this module's docstring already warns about:
+    gameweek numbers (1-38) repeat every season, so any chart plotting
+    'gameweek' on the x-axis has to be scoped to a single season first —
+    otherwise gameweek 1 of three different seasons lands on the same
+    x-axis point. price_trend()/demand_signal() used to skip this (fine
+    when only historical data existed; not fine now that a live
+    2026-27 snapshot sits in the same table).
+    """
+    _require_season_column(df)
+    season = season or df["season"].max()
+    return df[df["season"] == season]
+
+
 def price_trend(
     entity_col: str = "name",
     date_col: str = "gameweek",
     price_col: str = "price_m",
+    season: str | None = None,
 ) -> pd.DataFrame:
-    """Average price over time, grouped by player (or team, or position)."""
-    df = _load_prices()
+    """Average price over time, grouped by player (or team, or position),
+    within one season (defaults to the most recent season in the data —
+    pass `season` explicitly, e.g. from list_seasons(), to look at another).
+    """
+    df = _season_filtered(_load_prices(), season)
     return (
         df.groupby([entity_col, date_col])[price_col]
         .mean()
@@ -56,12 +86,17 @@ def price_trend(
     )
 
 
-def demand_signal(entity_col: str = "name", date_col: str = "gameweek") -> pd.DataFrame:
+def demand_signal(
+    entity_col: str = "name",
+    date_col: str = "gameweek",
+    season: str | None = None,
+) -> pd.DataFrame:
     """Net transfers (in - out) per gameweek — the demand pressure that
-    drives price changes. Useful on its own, and as an input to
+    drives price changes — within one season (see price_trend()'s
+    `season` argument). Useful on its own, and as an input to
     anomaly_scores().
     """
-    df = _load_prices()
+    df = _season_filtered(_load_prices(), season)
     return (
         df.groupby([entity_col, date_col])["transfers_balance"]
         .sum()
