@@ -1,0 +1,557 @@
+<title>PitchPulse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Karla:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #EEF1EC;
+    --surface: #FFFFFF;
+    --surface-2: #F5F7F2;
+    --ink: #16212B;
+    --ink-soft: #55635F;
+    --ink-faint: #8C9A93;
+    --line: #D7DED6;
+    --accent: #B5701A;
+    --accent-bg: #FFFFFF;
+    --accent-soft: #F0DBB8;
+    --pitch: #2C6B4C;
+    --pitch-soft: #DCEBE1;
+    --alert: #A8461F;
+    --alert-soft: #F4DDD1;
+    --shadow: 0 1px 2px rgba(22,33,43,.06), 0 8px 24px -12px rgba(22,33,43,.18);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #10171D;
+      --surface: #182229;
+      --surface-2: #1C262E;
+      --ink: #E9EDE9;
+      --ink-soft: #9FB0AA;
+      --ink-faint: #667A73;
+      --line: #29353D;
+      --accent: #E2A63B;
+      --accent-soft: #3A2E17;
+      --pitch: #5FB587;
+      --pitch-soft: #1B3527;
+      --alert: #E4835C;
+      --alert-soft: #3A211A;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 28px -14px rgba(0,0,0,.55);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #10171D;
+    --surface: #182229;
+    --surface-2: #1C262E;
+    --ink: #E9EDE9;
+    --ink-soft: #9FB0AA;
+    --ink-faint: #667A73;
+    --line: #29353D;
+    --accent: #E2A63B;
+    --accent-soft: #3A2E17;
+    --pitch: #5FB587;
+    --pitch-soft: #1B3527;
+    --alert: #E4835C;
+    --alert-soft: #3A211A;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 28px -14px rgba(0,0,0,.55);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Karla", ui-sans-serif, system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+  }
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+  }
+  h1, h2, h3 {
+    font-family: "Oswald", ui-sans-serif, system-ui, sans-serif;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.01em;
+    text-wrap: balance;
+    color: var(--ink);
+  }
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-size: clamp(34px, 5vw, 50px);
+    line-height: 1.05;
+    margin: 0 0 14px;
+  }
+  .pitch {
+    font-size: 18px;
+    color: var(--ink-soft);
+    max-width: 62ch;
+    margin: 0 0 28px;
+  }
+  .pitch em { color: var(--ink); font-style: normal; font-weight: 700; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 56px; }
+  .chip {
+    display: flex; align-items: baseline; gap: 7px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 9px 13px;
+    font-size: 13.5px;
+    box-shadow: var(--shadow);
+  }
+  .chip b {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 500;
+  }
+
+  section { margin-bottom: 60px; }
+  section > h2 {
+    font-size: 22px;
+    margin: 0 0 6px;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .sec-index {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    color: var(--ink-faint);
+    font-size: 14px;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .sec-note { color: var(--ink-soft); font-size: 15px; margin: 0 0 24px; max-width: 66ch; }
+
+  p { max-width: 68ch; }
+
+  /* Track cards */
+  .tracks { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 680px) { .tracks { grid-template-columns: 1fr; } }
+  .track {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 22px 22px 24px;
+    box-shadow: var(--shadow);
+    position: relative;
+  }
+  .track.recommended { border-color: var(--accent); }
+  .track-tag {
+    display: inline-block;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 5px;
+    padding: 3px 8px;
+    margin-bottom: 12px;
+  }
+  .track h3 {
+    font-size: 17px;
+    margin: 0 0 8px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .track p { font-size: 14.5px; color: var(--ink-soft); margin: 0 0 10px; max-width: none; }
+  .track ul { margin: 0 0 14px; padding-left: 18px; font-size: 14px; color: var(--ink-soft); }
+  .track ul li { margin-bottom: 4px; }
+  .track a {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12.5px;
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid currentColor;
+  }
+  .track a:hover { opacity: 0.75; }
+
+  /* Diagram */
+  figure { margin: 0; }
+  .diagram-frame {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 16px 8px;
+    box-shadow: var(--shadow);
+    overflow-x: auto;
+  }
+  svg.pipeline { display: block; width: 100%; height: auto; min-width: 620px; }
+  svg.pipeline text { font-family: "IBM Plex Mono", ui-monospace, monospace; fill: var(--ink); }
+  svg.pipeline .lbl { font-size: 11px; fill: var(--ink-soft); }
+  svg.pipeline .box-title { font-size: 12px; font-weight: 500; }
+  svg.pipeline .box-sub { font-size: 10px; fill: var(--ink-soft); }
+  svg.pipeline rect.node { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.3; }
+  svg.pipeline rect.node.accent { stroke: var(--accent); }
+  svg.pipeline line.edge, svg.pipeline path.edge { stroke: var(--ink-faint); stroke-width: 1.3; fill: none; }
+  svg.pipeline path.edge.hot { stroke: var(--accent); stroke-width: 1.6; }
+  figcaption { font-size: 13.5px; color: var(--ink-soft); padding: 10px 4px 0; max-width: 70ch; }
+
+  /* Roadmap */
+  .roadmap { list-style: none; margin: 0; padding: 0; position: relative; }
+  .roadmap::before {
+    content: "";
+    position: absolute;
+    left: 27px; top: 8px; bottom: 8px;
+    width: 1px;
+    background: var(--line);
+  }
+  .phase { position: relative; display: grid; grid-template-columns: 56px 1fr; gap: 0 20px; padding-bottom: 30px; }
+  .phase:last-child { padding-bottom: 0; }
+  .phase-num {
+    position: relative; z-index: 1;
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  .phase-num .n { font-size: 15px; font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .phase-num .w { font-size: 8.5px; color: var(--ink-faint); letter-spacing: 0.04em; }
+  .phase-body {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 18px;
+    box-shadow: var(--shadow);
+  }
+  .phase-body h3 { text-transform: none; letter-spacing: 0; font-size: 16px; margin: 0 0 3px; display:flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .phase-dates { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; color: var(--ink-faint); font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .phase-body p { margin: 0 0 8px; font-size: 14.5px; color: var(--ink-soft); max-width: none; }
+  .phase-body ul { margin: 0; padding-left: 18px; font-size: 14px; color: var(--ink-soft); }
+  .phase-body ul li { margin-bottom: 3px; }
+  .phase-tag {
+    display: inline-block; margin-top: 8px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--pitch); background: var(--pitch-soft);
+    border-radius: 5px; padding: 3px 8px;
+  }
+
+  /* Stack table */
+  table.stack { width: 100%; border-collapse: collapse; font-size: 14.5px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
+  table.stack thead th {
+    text-align: left; font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 500;
+    padding: 11px 16px; border-bottom: 1px solid var(--line); background: var(--surface-2);
+  }
+  table.stack td { padding: 12px 16px; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--ink-soft); }
+  table.stack tr:last-child td { border-bottom: none; }
+  table.stack td.layer { color: var(--ink); font-weight: 700; white-space: nowrap; }
+  table.stack td.tool { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; color: var(--accent); white-space: nowrap; }
+  .table-scroll { overflow-x: auto; }
+
+  /* Checklist */
+  .checklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .checklist li {
+    display: flex; gap: 12px; align-items: flex-start;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 9px;
+    padding: 13px 16px; box-shadow: var(--shadow); font-size: 14.5px; color: var(--ink-soft);
+  }
+  .checklist li strong { color: var(--ink); }
+  .checklist svg { flex: none; margin-top: 2px; color: var(--pitch); }
+
+  .callout {
+    border-left: 3px solid var(--alert);
+    background: var(--alert-soft);
+    border-radius: 0 10px 10px 0;
+    padding: 14px 18px;
+    font-size: 14.5px;
+    color: var(--ink);
+  }
+  .callout b { color: var(--alert); }
+
+  .refs { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 14px; }
+  .refs a { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--line); }
+  .refs a:hover { border-color: currentColor; }
+  .refs span { color: var(--ink-faint); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; }
+
+  footer { border-top: 1px solid var(--line); padding-top: 22px; color: var(--ink-faint); font-size: 13px; }
+</style>
+
+<div class="wrap">
+
+  <p class="eyebrow">Business Analytics — Portfolio Project Plan</p>
+  <h1>PitchPulse</h1>
+  <p class="pitch">An agentic analytics pipeline that reads the Premier League's real pricing markets, predicts player performance, and recommends who to pick — explaining its reasoning in plain language, not just plotting a chart — built to be your own end-to-end project, not a case-study rehash.</p>
+
+  <div class="chips">
+    <div class="chip"><b>Domain</b> English Premier League — sports market analytics</div>
+    <div class="chip"><b>Core stack</b> Python · SQL · CrewAI · Streamlit</div>
+    <div class="chip"><b>Timeline</b> Rolling, Sep–Dec 2026</div>
+    <div class="chip"><b>Owner</b> Solo build</div>
+  </div>
+
+  <section>
+    <h2><span class="sec-index">01</span> Why this direction</h2>
+    <p class="sec-note">Three things pushed this over a generic "Netflix churn" or "Titanic" project.</p>
+    <p>It's a domain you'll actually stay curious about at 11pm during Phase 4 — that matters more than it sounds, because a semester-long project dies from neglect, not from a wrong technical call. It keeps the thread back to <em style="font-style:normal;color:var(--ink);font-weight:700;">FairSeat</em>: that project looked at price-capped ticket resale from a venture angle, this one looks at a real football pricing market from the data side — a coherent story across your portfolio, not two unrelated projects. And it's technically wide without being shallow: a real relational data layer, statistical forecasting, and an <em style="font-style:normal;color:var(--ink);font-weight:700;">agent pipeline</em> that actually does something (not a chatbot bolted onto a dashboard as an afterthought) — three skills recruiters screen for separately.</p>
+    <p>The squad-recommendation idea (added below) pushes it one rung further, and that rung has a name from your own coursework: <strong style="color:var(--ink)">descriptive → diagnostic → predictive → prescriptive</strong>. Phases 1–2 are descriptive (what happened to prices). The anomaly flags in Phase 4 are diagnostic (why a price moved). A points-forecast model is predictive (what happens next). A squad optimizer that turns that forecast into an actual pick, inside real budget and squad-rule constraints, is prescriptive — the rung almost no student portfolio reaches, because it means the system recommends a decision, not just a number.</p>
+  </section>
+
+  <section>
+    <h2><span class="sec-index">02</span> Data track — decided</h2>
+    <p class="sec-note">There's no public dataset of real EPL ticket resale prices — no club or exchange publishes it — so "ticket market" isn't buildable on real data alone. Both tracks below sidestep that the same way: find a market inside football that <em style="font-style:normal">is</em> public and genuinely repriced by real money or real decisions. Going with Track A — reasoning below the cards.</p>
+    <div class="tracks">
+      <div class="track recommended">
+        <span class="track-tag">Chosen</span>
+        <h3>Track A — Fantasy Premier League price market</h3>
+        <p>Every FPL player has a price that rises and falls through the season purely from managers buying and selling — a real, public, dynamically-repriced market with no synthetic layer needed anywhere.</p>
+        <ul>
+          <li>Fully real: historical gameweek-by-gameweek prices, ownership %, transfers in/out, form</li>
+          <li>No gambling adjacency — the cleanest story for an academic/placement audience</li>
+          <li>"Price" maps directly onto demand, exactly like the original ticket-pricing idea</li>
+        </ul>
+        <a href="https://github.com/vaastav/Fantasy-Premier-League" target="_blank" rel="noopener">github.com/vaastav/Fantasy-Premier-League →</a>
+        <p style="margin-top:12px;font-size:13px;color:var(--ink-faint);">Concretely: each season's <code style="font-family:'IBM Plex Mono',monospace;">gws/merged_gw.csv</code> has one row per player per gameweek with <code style="font-family:'IBM Plex Mono',monospace;">value</code> (price), <code style="font-family:'IBM Plex Mono',monospace;">selected</code> (ownership) and <code style="font-family:'IBM Plex Mono',monospace;">transfers_balance</code> (net demand) — everything Phase 1–4 need, already time-stamped by gameweek.</p>
+      </div>
+      <div class="track">
+        <span class="track-tag">Fallback, not primary</span>
+        <h3>Track B — Betting-odds market</h3>
+        <p>Historical EPL match data with opening and closing bookmaker odds from multiple books — odds drift ahead of kickoff is a real, money-backed repricing signal (team news, injuries, form), structurally close to how a ticket's resale price moves as an event approaches.</p>
+        <ul>
+          <li>Rich time series back to 2000, fully real, no simulation</li>
+          <li>Sharper quant story — odds-drift and market-efficiency analytics is a recognized sports-analytics niche</li>
+          <li>Comes from betting data — have a one-line framing ready ("market-efficiency analytics," not tipping) for anyone who asks</li>
+        </ul>
+        <a href="https://www.kaggle.com/datasets/marcohuiii/english-premier-league-epl-match-data-2000-2025" target="_blank" rel="noopener">kaggle.com/datasets/marcohuiii/epl-match-data-2000-2025 →</a>
+      </div>
+    </div>
+    <p style="font-size:14.5px;color:var(--ink-soft);max-width:66ch;margin-top:18px;"><strong style="color:var(--ink)">Why A over B:</strong> zero synthetic layer either way, so it came down to overhead. Track A needs no framing caveat for a placement panel, has a free live API alongside the historical archive, and the "price" metaphor maps onto the original demand-signal idea without translation. Track B stays in the plan as a fallback — worth revisiting only if the FPL data turns out too thin for a specific analysis you want to run.</p>
+    <p style="font-size:14.5px;color:var(--ink-soft);max-width:66ch;margin-top:10px;"><strong style="color:var(--ink)">Historical vs. live, and why both matter:</strong> the community archives (<code style="font-family:'IBM Plex Mono',monospace;">merged_gw.csv</code>) stop at last season — there's no shortcut to real current-season history because it doesn't exist yet; it has to be built gameweek by gameweek as the season happens. So historical seasons train and validate the forecasting model, while the official live FPL API (<code style="font-family:'IBM Plex Mono',monospace;">src/live_ingest.py</code>) supplies this season's actual prices for <code style="font-family:'IBM Plex Mono',monospace;">recommend_squad()</code> to run on. Run it once now and again every gameweek — that recurring pull <em style="font-style:normal">is</em> the Ingest Agent's real job, not a placeholder.</p>
+  </section>
+
+  <section>
+    <h2><span class="sec-index">03</span> How the pipeline works</h2>
+    <p class="sec-note">Four stages, one trigger. The gold path is the one that makes it "agentic" rather than just automated — the analyst's findings and anomaly flags are handed to an LLM agent that writes the report, instead of a template filling in numbers.</p>
+    <figure class="diagram-frame">
+      <svg class="pipeline" viewBox="0 0 980 380" role="img" aria-label="Raw match and price files are extracted and validated by an Ingest Agent into a SQLite store; an Analyst Agent queries it to forecast player points, optimize a squad within budget, and compute anomaly scores; plain metrics flow to a Streamlit dashboard while findings, the recommended squad, and anomaly flags flow, as the highlighted path, to a Report Agent that writes the narrative report and alerts.">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor" />
+          </marker>
+          <marker id="arrowHot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)" />
+          </marker>
+        </defs>
+
+        <!-- Trigger -->
+        <rect class="node" x="200" y="24" width="200" height="46" rx="8"/>
+        <text x="300" y="44" text-anchor="middle" class="box-title">Trigger</text>
+        <text x="300" y="59" text-anchor="middle" class="box-sub">"Run analysis" button, or each gameweek deadline</text>
+        <line class="edge" x1="300" y1="70" x2="300" y2="118" marker-end="url(#arrow)"/>
+
+        <!-- Row 1 -->
+        <rect class="node" x="20" y="118" width="150" height="64" rx="8"/>
+        <text x="95" y="145" text-anchor="middle" class="box-title">Raw files</text>
+        <text x="95" y="160" text-anchor="middle" class="box-sub">Kaggle CSVs</text>
+
+        <line class="edge" x1="170" y1="150" x2="204" y2="150" marker-end="url(#arrow)"/>
+        <text x="187" y="140" text-anchor="middle" class="lbl">extract</text>
+
+        <rect class="node accent" x="204" y="118" width="176" height="64" rx="8"/>
+        <text x="292" y="143" text-anchor="middle" class="box-title">Ingest Agent</text>
+        <text x="292" y="158" text-anchor="middle" class="box-sub">validate · clean · normalize</text>
+
+        <line class="edge" x1="380" y1="150" x2="414" y2="150" marker-end="url(#arrow)"/>
+        <text x="397" y="140" text-anchor="middle" class="lbl">load</text>
+
+        <rect class="node" x="414" y="118" width="170" height="64" rx="8"/>
+        <text x="499" y="143" text-anchor="middle" class="box-title">SQLite store</text>
+        <text x="499" y="158" text-anchor="middle" class="box-sub">clean, versioned tables</text>
+
+        <line class="edge" x1="584" y1="150" x2="618" y2="150" marker-end="url(#arrow)"/>
+        <text x="601" y="140" text-anchor="middle" class="lbl">query</text>
+
+        <rect class="node accent" x="618" y="112" width="220" height="76" rx="8"/>
+        <text x="728" y="140" text-anchor="middle" class="box-title">Analyst Agent</text>
+        <text x="728" y="155" text-anchor="middle" class="box-sub">points forecast + squad optimizer,</text>
+        <text x="728" y="168" text-anchor="middle" class="box-sub">anomaly / spike scoring</text>
+
+        <!-- Branches -->
+        <path class="edge" d="M700,188 C660,230 610,250 590,278" marker-end="url(#arrow)"/>
+        <text x="612" y="238" text-anchor="middle" class="lbl">metrics</text>
+
+        <path class="edge hot" d="M780,188 C830,230 850,250 850,278" marker-end="url(#arrowHot)"/>
+        <text x="862" y="238" text-anchor="middle" class="lbl" style="fill:var(--accent)">findings + flags</text>
+
+        <rect class="node" x="500" y="280" width="180" height="64" rx="8"/>
+        <text x="590" y="306" text-anchor="middle" class="box-title">Dashboard</text>
+        <text x="590" y="321" text-anchor="middle" class="box-sub">Streamlit + Plotly</text>
+
+        <rect class="node accent" x="754" y="280" width="204" height="64" rx="8"/>
+        <text x="856" y="306" text-anchor="middle" class="box-title">Report Agent</text>
+        <text x="856" y="321" text-anchor="middle" class="box-sub">LLM: narrative + alert</text>
+      </svg>
+    </figure>
+    <figcaption>The gold edge is what makes this "agentic": the analyst's findings don't just populate a chart, they're handed to an LLM agent that writes the actual business narrative — "Haaland's price rose for the third straight gameweek as ownership crossed 45%, consistent with template-team momentum ahead of the deadline" — or, when you ask for a squad, explains <em>why</em> the optimizer picked each player over the alternatives, instead of a human reading the numbers and writing that sentence.</figcaption>
+  </section>
+
+  <section>
+    <h2><span class="sec-index">04</span> Semester roadmap</h2>
+    <p class="sec-note">Eight phases, each one a working checkpoint you could show in a stand-up. Dates assume a Sept 1 start — shift the whole block to match your actual academic calendar.</p>
+    <ol class="roadmap">
+      <li class="phase">
+        <div class="phase-num"><span class="n">0</span><span class="w">WK 1</span></div>
+        <div class="phase-body">
+          <h3>Setup &amp; framing <span class="phase-dates">Sep 1 – 7</span></h3>
+          <p>Lock the decisions that are expensive to change later.</p>
+          <ul>
+            <li>Download 1–2 seasons of <code style="font-family:'IBM Plex Mono',monospace;">merged_gw.csv</code> (Track A), eyeball the columns</li>
+            <li>Repo scaffold, virtual env, GitHub with a real commit history from day one</li>
+            <li>Write a one-paragraph problem statement and 3–4 KPIs the project will answer</li>
+          </ul>
+        </div>
+      </li>
+      <li class="phase">
+        <div class="phase-num"><span class="n">1</span><span class="w">WK 2–3</span></div>
+        <div class="phase-body">
+          <h3>Data layer <span class="phase-dates">Sep 8 – 21</span></h3>
+          <p>Boring but load-bearing — most portfolio projects skip this and it shows.</p>
+          <ul>
+            <li>Ingest raw files into SQLite; write it as a script, not a notebook cell</li>
+            <li>Cleaning: missing values, dtype fixes, dedup — same techniques as your Python EDA assignment</li>
+            <li>EDA notebook + a one-page data dictionary</li>
+          </ul>
+        </div>
+      </li>
+      <li class="phase">
+        <div class="phase-num"><span class="n">2</span><span class="w">WK 4–6</span></div>
+        <div class="phase-body">
+          <h3>Core dashboard <span class="phase-dates">Sep 22 – Oct 12</span></h3>
+          <p>No agent yet, no forecasting yet. This checkpoint alone is a submittable BA deliverable.</p>
+          <ul>
+            <li>Streamlit + Plotly: price trend per player, ownership over time, gameweek-by-gameweek view</li>
+            <li>Filters by team, position, gameweek range</li>
+          </ul>
+          <span class="phase-tag">Milestone: shippable v0</span>
+        </div>
+      </li>
+      <li class="phase">
+        <div class="phase-num"><span class="n">3</span><span class="w">WK 7–9</span></div>
+        <div class="phase-body">
+          <h3>Agent pipeline v1 <span class="phase-dates">Oct 13 – Nov 2</span></h3>
+          <p>Wire the four boxes from the diagram above into one working run.</p>
+          <ul>
+            <li>Ingest Agent + Analyst Agent + Report Agent in CrewAI, sequential process</li>
+            <li>One button click → one written report, end to end</li>
+          </ul>
+        </div>
+      </li>
+      <li class="phase">
+        <div class="phase-num"><span class="n">4</span><span class="w">WK 10–11</span></div>
+        <div class="phase-body">
+          <h3>Forecasting &amp; anomaly detection <span class="phase-dates">Nov 3 – 16</span></h3>
+          <p>The predictive layer — this is what Phase 5's optimizer will run on.</p>
+          <ul>
+            <li>Points-forecast model per player (start with a rolling-form baseline before anything fancier)</li>
+            <li>Anomaly/spike detector on price and transfer moves, feeding the Report Agent's flags</li>
+          </ul>
+        </div>
+      </li>
+      <li class="phase">
+        <div class="phase-num"><span class="n">5</span><span class="w">WK 12–13</span></div>
+        <div class="phase-body">
+          <h3>Squad optimizer <span class="phase-dates">Nov 17 – 30</span></h3>
+          <p>The prescriptive layer — turns a forecast into an actual recommended pick, not just a number.</p>
+          <ul>
+            <li>Constrained optimizer (PuLP): best 15 within a £100m budget, squad rules, max 3 per club</li>
+            <li>Report Agent explains each pick against the runners-up it passed over</li>
+          </ul>
+          <span class="phase-tag">Milestone: recommends a squad</span>
+        </div>
+      </li>
+      <li class="phase">
+        <div class="phase-num"><span class="n">6</span><span class="w">WK 14</span></div>
+        <div class="phase-body">
+          <h3>Polish &amp; deploy <span class="phase-dates">Dec 1 – 7</span></h3>
+          <p>Turn a working script into something a stranger can open and understand.</p>
+          <ul>
+            <li>Error handling, loading states, empty states</li>
+            <li>Deploy dashboard (Streamlit Community Cloud); finalize README + this architecture diagram</li>
+          </ul>
+        </div>
+      </li>
+      <li class="phase">
+        <div class="phase-num"><span class="n">7</span><span class="w">WK 15+</span></div>
+        <div class="phase-body">
+          <h3>Portfolio packaging <span class="phase-dates">Dec 8 – 14</span></h3>
+          <p>The work is done — now make it findable and explainable.</p>
+          <ul>
+            <li>2–3 minute demo video, one-page case study</li>
+            <li>Resume bullets; rehearse the "walk me through your architecture" answer</li>
+          </ul>
+          <span class="phase-tag">Milestone: placement-ready</span>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <section>
+    <h2><span class="sec-index">05</span> Tech stack</h2>
+    <p class="sec-note">Chosen for the fastest path to a <em style="font-style:normal">working, demoable</em> agent pipeline — not the most impressive stack on paper. Recruiter-recognized layers throughout, with one deliberate "flex" (the agent orchestration).</p>
+    <div class="table-scroll">
+      <table class="stack">
+        <thead><tr><th>Layer</th><th>Tool</th><th>Why this one</th></tr></thead>
+        <tbody>
+          <tr><td class="layer">Data store</td><td class="tool">SQLite</td><td>Zero setup, still "a real database" in an interview; swap for Postgres later if you want to show that range</td></tr>
+          <tr><td class="layer">Analysis</td><td class="tool">pandas, statsmodels/Prophet, scikit-learn</td><td>Same libraries you already used in the Python EDA assignment — reuse that muscle memory</td></tr>
+          <tr><td class="layer">Optimization</td><td class="tool">PuLP</td><td>Turns a points forecast into an actual squad pick under real constraints (budget, positions, max-per-club) — "operations research," a skill almost no BA portfolio shows</td></tr>
+          <tr><td class="layer">Agent orchestration</td><td class="tool">CrewAI</td><td>Fastest to a working sequential ingest → analyze → report pipeline for a first build; role-based agents map cleanly onto the diagram above</td></tr>
+          <tr><td class="layer">Agent orchestration (v2, optional)</td><td class="tool">LangGraph</td><td>More explicit state control and graph visualization — a stronger "advanced" signal once v1 works; worth a v2 rebuild if time allows</td></tr>
+          <tr><td class="layer">LLM</td><td class="tool">Claude or OpenAI API</td><td>Either works for the Report Agent's narrative step; needs an API key and a small budget for calls</td></tr>
+          <tr><td class="layer">Dashboard</td><td class="tool">Streamlit + Plotly</td><td>Fastest path from pandas DataFrame to an interactive, deployable UI</td></tr>
+          <tr><td class="layer">Deployment</td><td class="tool">Streamlit Community Cloud</td><td>Free, gives you a live demo link for the resume</td></tr>
+          <tr><td class="layer">Version control</td><td class="tool">GitHub</td><td>A clean, incremental commit history is itself a portfolio signal — don't squash it all into one commit</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="sec-index">06</span> What lands in your portfolio</h2>
+    <p class="sec-note">The finished set, not just the code.</p>
+    <ul class="checklist">
+      <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 12.5L9.5 18L20 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>GitHub repo</strong> with a README that leads with the architecture diagram, not the install instructions</span></li>
+      <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 12.5L9.5 18L20 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>Live demo link</strong> — a deployed dashboard someone can click without asking you to run anything locally</span></li>
+      <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 12.5L9.5 18L20 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>2–3 minute demo video</strong> — screen recording narrating one full agent run, start to finish</span></li>
+      <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 12.5L9.5 18L20 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>One-page case study</strong> — problem, approach, one number that shows impact or accuracy, one thing you'd do differently</span></li>
+      <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 12.5L9.5 18L20 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>Three resume bullets</strong> — the analytics, the agent pipeline, and the squad optimizer, each with a concrete number</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <div class="callout"><b>If you ever switch to Track B later:</b> write the one-sentence framing into your README before you write any code — "this studies market efficiency in bookmaker pricing, not betting strategy." Decide it once, state it up front, and it stops being a question anyone needs to ask you in an interview.</div>
+  </section>
+
+  <footer>
+    <p style="margin:0 0 10px;color:var(--ink-soft);font-size:13.5px;">Further reading</p>
+    <ul class="refs">
+      <li><span>dataset · A</span> <a href="https://github.com/vaastav/Fantasy-Premier-League" target="_blank" rel="noopener">vaastav/Fantasy-Premier-League — historical gameweek data (GitHub)</a></li>
+      <li><span>dataset · A</span> <a href="https://fantasy.premierleague.com/api/bootstrap-static/" target="_blank" rel="noopener">Official FPL API — live prices, ownership, form (no key required)</a></li>
+      <li><span>dataset · A alt</span> <a href="https://github.com/olbauday/FPL-Core-Insights" target="_blank" rel="noopener">FPL-Core-Insights — FPL data fused with match stats &amp; Elo, 2026/27 (GitHub)</a></li>
+      <li><span>dataset · B</span> <a href="https://www.kaggle.com/datasets/marcohuiii/english-premier-league-epl-match-data-2000-2025" target="_blank" rel="noopener">English Premier League (EPL) Match Data 2000-2025 — Kaggle</a></li>
+      <li><span>frameworks</span> <a href="https://dev.to/synsun/autogen-vs-langgraph-vs-crewai-which-agent-framework-actually-holds-up-in-2026-4a7b" target="_blank" rel="noopener">AutoGen vs LangGraph vs CrewAI, 2026 comparison — DEV Community</a></li>
+    </ul>
+    <p style="margin-top:18px;">PitchPulse — a Business Analytics portfolio project plan. Revisit and edit this page as the build evolves.</p>
+  </footer>
+
+</div>
