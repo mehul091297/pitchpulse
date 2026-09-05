@@ -43,20 +43,45 @@ context feed for the Report Agent, not a squad-eligibility check --
 and it's optional: if the external host is unreachable, callers get a
 clear error rather than the whole crew run breaking.
 
-Second known limitation, confirmed directly (2026-09): this dataset can
-also simply be missing a real, high-profile transfer outright, not just
-lag on loans. Checked after two real 2026 Liverpool signings (Ronald
-Araujo, Victor Munoz) didn't appear in recent_transfers() output --
-traced it all the way to the fully raw, unfiltered transfers table (no
-PL filter, no date window) and confirmed both are absent there too, so
-this isn't a bug in the filtering/date-window logic above (a comparable
-real transfer, Jeremy Jacquet's, DOES appear correctly at every stage,
-which is what confirms the pipeline itself works). It's a genuine gap
-in this specific snapshot of the upstream community dataset. Same
-conclusion as the loan-lag case: treat this feed as "recent moves we
-know about," not an exhaustive list -- cross-check anything load-bearing
-against the official source before treating an absence as confirmation
-a transfer didn't happen.
+Second known limitation, quantified directly (2026-09): this dataset can
+also simply be missing a real transfer outright, not just lag on loans.
+First noticed when two real 2026 Liverpool signings (Ronald Araujo,
+Victor Munoz) didn't appear in recent_transfers() output -- traced all
+the way to the fully raw, unfiltered transfers table (no PL filter, no
+date window) and confirmed both are absent there too, so this isn't a
+bug in the filtering/date-window logic above (a comparable real
+transfer, Jeremy Jacquet's, DOES appear correctly at every stage, which
+is what confirms the pipeline itself works).
+
+To find out whether that was an isolated miss or a bigger problem, every
+one of Mehul's 170 manually Transfermarkt-verified summer-2026 arrivals
+across all 20 Premier League clubs was checked by name against this
+table: 160/170 (94.1%) were found; 10 were missing entirely, mostly
+younger academy-tier signings from clubs with thinner Transfermarkt
+coverage (e.g. Troyes, Independiente del Valle, Benfica B), plus two
+more surprising domestic moves (Hayden Hackney to Everton, Joe Gelhardt
+to Hull). Araujo and Munoz themselves didn't even show up in that
+missing-list -- their names DO appear in the table, just attached to
+earlier-career transfers (Barcelona-era moves, youth-team moves), not
+their actual 2026 signings. So there are two distinct failure modes:
+some real transfers are absent outright (~6% of arrivals, this check),
+and some players' most recent real transfer specifically can be missing
+even though the player isn't a stranger to the dataset. Neither creates
+a wrong-answer risk here, since recent_transfers() only ever returns
+rows that fall inside the requested date window -- an old Barcelona-era
+row could never surface as if it were current. The failure mode is
+strictly "a genuine recent transfer doesn't appear," never "a stale one
+appears mislabeled as current."
+
+Net conclusion: a real, low-single-digit-percentage completeness gap,
+not a systemic problem with the source -- not worth building a manual
+data-ingestion path to patch (that would trade a small, honestly
+documented gap for a permanent, hand-maintained data source, which
+undercuts the point of using an automated feed at all). Same conclusion
+as the loan-lag case: treat this feed as "recent moves we know about,"
+not an exhaustive list -- cross-check anything load-bearing against the
+official source before treating an absence as confirmation a transfer
+didn't happen.
 """
 
 import io
