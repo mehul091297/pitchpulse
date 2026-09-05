@@ -40,6 +40,7 @@ Goes one step past most student analytics projects: it doesn't just describe wha
 - [x] Forecasting wired in (`forecast_points()` — verified against real data)
 - [x] Anomaly detection wired in (`anomaly_scores()` — per-player rolling z-score on price change and transfer swings, wired into the crew as a new tool; verified with synthetic tests and a real Colab run — correctly reports 'not enough history yet' this early in 2026-27 instead of fabricating a result)
 - [x] Squad optimizer wired in (`recommend_squad()` — verified against real data, matches deployed dashboard output)
+- [x] Recent transfer tracking wired in (`src/transfers.py` — real Premier League transfers from a weekly-refreshed Transfermarkt dataset, wired into the crew as context for the analyst/report agents; verified with synthetic tests and a real Colab run against live data — two known, documented limitations: subsequent loan moves can lag the parent-club record, and the upstream snapshot can be missing an individual high-profile transfer outright, e.g. two real 2026 Liverpool signings confirmed absent even from the raw unfiltered source)
 - [x] Deployed — live at https://pitchpulse-bs7uhkkyuchigcpnxupi29.streamlit.app/
 - [ ] Demo recorded
 
@@ -63,6 +64,7 @@ src/live_ingest.py # this season's live snapshot, straight from the official FPL
 src/bootstrap.py   # one-call ensure_data(): downloads + ingests + snapshots — what the deployed dashboard runs on a fresh checkout
 src/db.py          # SQLite connection helper
 src/analysis.py    # trend, points forecast, squad optimizer (PuLP), anomaly-score functions
+src/transfers.py   # recent Premier League transfers from a real Transfermarkt-sourced dataset
 src/agents/crew.py # CrewAI pipeline: Ingest -> Analyst -> Report agents
 dashboard/app.py   # Streamlit + Plotly dashboard (season-safe trends + squad recommendation)
 reports/           # generated narrative reports land here

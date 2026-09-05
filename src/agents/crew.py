@@ -159,6 +159,45 @@ def anomaly_alerts_tool(season: str = "") -> str:
     return "\n".join(lines)
 
 
+@tool("Get recent Premier League transfers")
+def recent_transfers_tool(days: int = 30) -> str:
+    """Get real Premier League transfers (arrivals, departures, and
+    already-announced future moves) from the last `days` days — sourced
+    from real Transfermarkt data, refreshed weekly. Use this to check
+    whether a player is still actually in the league or has since moved
+    clubs, especially useful during the summer and winter transfer
+    windows. This is a market-news feed, NOT the source of truth for
+    whether a player is playing minutes right now — a player recorded
+    here can still be out on loan elsewhere without that loan showing
+    up in this data; trust the squad/points tools for actual current
+    playing status, and this tool for transfer context.
+
+    If this comes back saying the data source is unreachable, that's an
+    optional enrichment failing, not a core pipeline problem — proceed
+    with the rest of your analysis regardless.
+    """
+    from src.transfers import recent_transfers
+
+    try:
+        df = recent_transfers(days=days)
+    except (RuntimeError, ValueError) as exc:
+        return f"Recent transfer data unavailable ({exc}). Proceed without it."
+
+    if df.empty:
+        return f"No Premier League transfers recorded in the last {days} days."
+
+    lines = [f"Premier League transfers, last {days} days ({len(df)} found):"]
+    for _, row in df.iterrows():
+        fee = f"£{row['transfer_fee']:,.0f}" if row["transfer_fee"] else "free/undisclosed"
+        date_str = row["transfer_date"].strftime("%Y-%m-%d")
+        lines.append(
+            f"  [{row['status']}] {row['player_name']}: "
+            f"{row['from_club_name']} -> {row['to_club_name']} "
+            f"({fee}, {date_str})"
+        )
+    return "\n".join(lines)
+
+
 @tool("Recommend a squad")
 def recommend_squad_tool(budget: float = 100.0) -> str:
     """Build the budget-optimal 15-player squad for the current
@@ -233,10 +272,10 @@ def build_crew(budget: float = 100.0) -> Crew:
     analyst_agent = Agent(
         role="Football Data Analyst",
         goal=(
-            "Analyze price trends, transfer demand, and player-specific "
-            "anomalies, and produce a budget-optimal squad recommendation, "
-            "with reasoning grounded in the actual numbers your tools "
-            "return."
+            "Analyze price trends, transfer demand, player-specific "
+            "anomalies, and recent real-world transfers, and produce a "
+            "budget-optimal squad recommendation, with reasoning grounded "
+            "in the actual numbers your tools return."
         ),
         backstory=(
             "You're a Fantasy Premier League analyst who never states a "
@@ -245,12 +284,17 @@ def build_crew(budget: float = 100.0) -> Crew:
             "what the optimizer chose. You also know the difference "
             "between 'nothing unusual happened' and 'there isn't enough "
             "history yet to tell' when your anomaly tool comes back "
-            "empty, and you say which one it actually is."
+            "empty, and you say which one it actually is. You know real "
+            "transfer news is context, not a squad-eligibility check — a "
+            "player can show up there without it reflecting where "
+            "they're actually playing right now (e.g. out on loan), so "
+            "you never let it override what the squad/points tools say."
         ),
         tools=[
             price_movers_tool,
             demand_swings_tool,
             anomaly_alerts_tool,
+            recent_transfers_tool,
             recommend_squad_tool,
         ],
         llm=llm,
@@ -287,21 +331,25 @@ def build_crew(budget: float = 100.0) -> Crew:
     analyze_task = Task(
         description=(
             "Using the now-current data, pull the biggest price movers, "
-            "transfer demand swings, and any player-specific anomaly "
-            "alerts for the most recent season, and build a squad "
-            "recommendation with a budget of £{budget}m. Summarize your "
-            "findings clearly, including WHY specific picks make sense "
-            "relative to their price. If the anomaly tool returns no "
-            "alerts, say plainly whether that's because nothing unusual "
-            "happened or because there isn't enough history yet — don't "
-            "blur the two together."
+            "transfer demand swings, any player-specific anomaly alerts, "
+            "and recent real-world Premier League transfers for the most "
+            "recent season, and build a squad recommendation with a "
+            "budget of £{budget}m. Summarize your findings clearly, "
+            "including WHY specific picks make sense relative to their "
+            "price. If the anomaly tool returns no alerts, say plainly "
+            "whether that's because nothing unusual happened or because "
+            "there isn't enough history yet — don't blur the two "
+            "together. If the transfer-news tool is unavailable, note "
+            "that plainly too and move on — it's optional context, not a "
+            "blocker."
         ),
         expected_output=(
             "A structured summary covering: (1) notable price "
             "risers/fallers, (2) notable transfer demand swings, (3) any "
             "anomaly alerts (player-specific price/demand moves well "
             "outside that player's own normal range) and, if none, which "
-            "of the two honest reasons why, (4) the recommended 15-player "
+            "of the two honest reasons why, (4) any recent real-world "
+            "transfers worth knowing about, (5) the recommended 15-player "
             "squad with total predicted points and total cost, with brief "
             "reasoning for a few standout picks."
         ),
@@ -319,9 +367,10 @@ def build_crew(budget: float = 100.0) -> Crew:
             "movers, then any anomaly alerts as a short 'watch list' — "
             "and if there are none, say plainly whether that's because "
             "nothing unusual happened or because there isn't enough "
-            "history yet to tell, exactly as the analyst reported it. "
-            "Stay strictly grounded in the analyst's numbers — never "
-            "invent a reason they didn't give."
+            "history yet to tell, exactly as the analyst reported it — "
+            "then close with any recent real-world transfers worth "
+            "knowing about. Stay strictly grounded in the analyst's "
+            "numbers — never invent a reason they didn't give."
         ),
         expected_output="A short markdown report, ready to read as-is.",
         agent=report_agent,
