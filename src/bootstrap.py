@@ -21,6 +21,7 @@ from pathlib import Path
 import requests
 import sqlalchemy
 
+from src.availability import append_availability_snapshot
 from src.db import get_engine
 from src.ingest import RAW_DIR, RAW_FILES, SEASON_PATTERN, main as run_ingest
 from src.live_ingest import append_snapshot
@@ -76,9 +77,21 @@ def ensure_data() -> None:
     what keeps current-season prices from going stale). The dashboard
     wraps this call in an st.cache_resource(ttl=...) so it doesn't hit
     the live API on every rerun, just periodically.
+
+    Also refreshes player availability (Phase 6) the same way — but
+    that refresh is wrapped so a failure there can't take down the core
+    price pipeline. It's the same official endpoint live_ingest already
+    depends on, so a failure here would usually mean append_snapshot()
+    above already failed too and this line is never reached anyway;
+    the try/except is for the narrower case of that endpoint responding
+    but missing/renaming a status field this module didn't anticipate.
     """
     ensure_historical()
     append_snapshot()
+    try:
+        append_availability_snapshot()
+    except Exception as exc:
+        print(f"Availability snapshot skipped ({exc}) — core price data is still current.")
 
 
 if __name__ == "__main__":

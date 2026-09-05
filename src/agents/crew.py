@@ -37,9 +37,10 @@ from crewai.tools import tool
 @tool("Ensure current data")
 def ensure_data_tool() -> str:
     """Make sure the price/points database has both historical seasons
-    and this season's latest live snapshot, downloading and ingesting
-    from scratch if needed. Call this first, before any analysis tool —
-    the other tools assume the database already exists.
+    and this season's latest live snapshot (plus a fresh player
+    availability snapshot), downloading and ingesting from scratch if
+    needed. Call this first, before any analysis tool — the other
+    tools assume the database already exists.
     """
     from src.analysis import list_seasons
     from src.bootstrap import ensure_data
@@ -202,9 +203,11 @@ def recent_transfers_tool(days: int = 30) -> str:
 def recommend_squad_tool(budget: float = 100.0) -> str:
     """Build the budget-optimal 15-player squad for the current
     gameweek: maximize predicted points subject to the real FPL rules
-    (budget, exact position counts, max 3 players per club). Returns
-    the squad, total predicted points, total cost, and solver status
-    as text.
+    (budget, exact position counts, max 3 players per club). Excludes
+    injured/suspended/unavailable players by default (whenever
+    availability data has been ingested — see the availability tool).
+    Returns the squad, total predicted points, total cost, and solver
+    status as text.
     """
     from src.analysis import recommend_squad
 
@@ -224,6 +227,122 @@ def recommend_squad_tool(budget: float = 100.0) -> str:
             f"  {row['position']} {row['name']} ({row['team']}) — "
             f"£{row['price_m']:.1f}m, {row['predicted_points']:.1f} predicted pts"
         )
+    return "\n".join(lines)
+
+
+@tool("Get player availability / injury news")
+def player_availability_tool(top_n: int = 10) -> str:
+    """Get current injury/doubt/suspension status for the league's most
+    notable affected players, straight from FPL's own official data —
+    NOT scraped news, so there's no separate 'source' to go stale or get
+    blocked. 'Notable' is proxied by price (FPL prices correlate with
+    prominence — a doubtful £12m player matters more to report than a
+    doubtful £4.0m fringe player), sorted highest price first, capped at
+    `top_n`.
+
+    A player showing 'doubtful' with a chance-of-playing percentage is a
+    real but partial risk, not a reason to assume they're out — that
+    distinction matters when reporting this, and recommend_squad_tool
+    already only excludes the clear-cut unavailable cases (injured,
+    suspended, unavailable, not considered for selection), not doubtful
+    ones.
+
+    If this comes back saying no availability data has been ingested
+    yet, that's an optional enrichment not yet run (call
+    src.availability.append_availability_snapshot() first) — not a
+    pipeline failure.
+    """
+    from src.analysis import player_availability
+    from src.db import get_engine
+
+    try:
+        avail = player_availability()
+    except RuntimeError as exc:
+        return f"Availability data unavailable ({exc}). Proceed without it."
+
+    if avail.empty:
+        return "No availability data ingested yet."
+
+    notable = avail[avail["status"] != "a"]
+    if notable.empty:
+        return "No injuries, doubts, or suspensions currently reported for any player."
+
+    # Price is only in the 'prices' table, not 'availability' — join in
+    # for the prominence ranking rather than duplicating price into
+    # every availability snapshot.
+    import pandas as pd
+
+    prices = pd.read_sql("SELECT code, price_m FROM prices", get_engine())
+    latest_price = prices.groupby("code")["price_m"].last()
+    notable = notable.copy()
+    notable["price_m"] = notable["code"].map(latest_price).fillna(0)
+    notable = notable.sort_values("price_m", ascending=False).head(top_n)
+
+    lines = [f"Player availability news ({len(notable)} shown, most notable by price first):"]
+    for _, row in notable.iterrows():
+        news = f" — {row['news']}" if row["news"] else ""
+        chance = (
+            f", {row['chance_of_playing_next_round']:.0f}% chance next round"
+            if pd.notna(row["chance_of_playing_next_round"])
+            else ""
+        )
+        lines.append(f"  {row['name']} ({row['team']}, £{row['price_m']:.1f}m): {row['status_label']}{chance}{news}")
+    return "\n".join(lines)
+
+
+@tool("Recommend chip timing strategy")
+def chip_strategy_tool(budget: float = 100.0, horizon: int = 8) -> str:
+    """Recommend which upcoming gameweek to play each of the season's
+    four chips (Wildcard, Free Hit, Triple Captain, Bench Boost) for the
+    current recommended squad, using FPL's own real fixture difficulty
+    and fixture count (blank/double gameweeks) — see
+    src.analysis.recommend_chip_strategy's docstring for the full
+    reasoning behind each chip's timing rule.
+
+    Only ever recommends gameweeks within whichever chip-half (GW1-19
+    or GW20-38) the next actionable gameweek falls in — first-half
+    chips expire rather than carrying over, so a second-half suggestion
+    would be useless advice right now.
+
+    If fixture data can't be fetched, this is a real limitation (chip
+    timing can't work without knowing which gameweek each team plays)
+    — say so plainly rather than guessing.
+    """
+    from src.analysis import recommend_squad, recommend_chip_strategy
+    from src.fixtures import load_team_fixtures, next_actionable_gameweek
+
+    squad, status = recommend_squad(budget=budget)
+    if status != "Optimal":
+        return f"Can't recommend chip timing — squad solver status was {status}, not Optimal."
+
+    try:
+        current_gw = next_actionable_gameweek()
+        team_fixtures = load_team_fixtures()
+    except Exception as exc:
+        return f"Chip-timing data unavailable ({exc}). This needs real fixture data to work at all."
+
+    result = recommend_chip_strategy(
+        squad_codes=squad["code"].tolist(),
+        current_gameweek=current_gw,
+        team_fixtures=team_fixtures,
+        horizon=horizon,
+    )
+
+    if "note" in result and "bench_boost" not in result:
+        return f"Chip strategy ({result['half']}): {result['note']}"
+
+    lines = [f"Chip strategy for the {result['half']} half, gameweeks {result['horizon_gameweeks']}:"]
+    bb, tc, fh, wc = result["bench_boost"], result["triple_captain"], result["free_hit"], result["wildcard"]
+    lines.append(f"  Bench Boost — GW{bb['gameweek']} (bench expected {bb['expected_bench_points']} pts)")
+    lines.append(f"  Triple Captain — GW{tc['gameweek']} on {tc['player']} (expected {tc['expected_points']} pts)")
+    lines.append(f"  Free Hit — GW{fh['gameweek']} ({fh['reason']})")
+    lines.append(f"  Wildcard — GW{wc['gameweek']} ({wc['reason']})")
+    if result.get("gameweeks_without_fixture_data"):
+        lines.append(
+            f"  (No fixture data yet for gameweek(s) {result['gameweeks_without_fixture_data']} "
+            "— excluded from consideration rather than guessed.)"
+        )
+    lines.append(f"  Methodology: {result['methodology']}")
     return "\n".join(lines)
 
 
@@ -273,9 +392,10 @@ def build_crew(budget: float = 100.0) -> Crew:
         role="Football Data Analyst",
         goal=(
             "Analyze price trends, transfer demand, player-specific "
-            "anomalies, and recent real-world transfers, and produce a "
-            "budget-optimal squad recommendation, with reasoning grounded "
-            "in the actual numbers your tools return."
+            "anomalies, recent real-world transfers, and player "
+            "availability, and produce a budget-optimal squad "
+            "recommendation plus a chip-timing strategy, with reasoning "
+            "grounded in the actual numbers your tools return."
         ),
         backstory=(
             "You're a Fantasy Premier League analyst who never states a "
@@ -288,14 +408,24 @@ def build_crew(budget: float = 100.0) -> Crew:
             "transfer news is context, not a squad-eligibility check — a "
             "player can show up there without it reflecting where "
             "they're actually playing right now (e.g. out on loan), so "
-            "you never let it override what the squad/points tools say."
+            "you never let it override what the squad/points tools say. "
+            "You know the same is true of injury/doubt news: a 'doubtful' "
+            "player is a real but partial risk, not confirmation they'll "
+            "sit out — you never state a player is definitely out unless "
+            "their status is genuinely injured/suspended/unavailable, not "
+            "just doubtful. And you know your chip-timing recommendations "
+            "are an explainable heuristic over real fixture data, not a "
+            "guarantee — you present them as a strong starting point, not "
+            "as certainty."
         ),
         tools=[
             price_movers_tool,
             demand_swings_tool,
             anomaly_alerts_tool,
             recent_transfers_tool,
+            player_availability_tool,
             recommend_squad_tool,
+            chip_strategy_tool,
         ],
         llm=llm,
         verbose=True,
@@ -332,16 +462,19 @@ def build_crew(budget: float = 100.0) -> Crew:
         description=(
             "Using the now-current data, pull the biggest price movers, "
             "transfer demand swings, any player-specific anomaly alerts, "
-            "and recent real-world Premier League transfers for the most "
-            "recent season, and build a squad recommendation with a "
-            "budget of £{budget}m. Summarize your findings clearly, "
-            "including WHY specific picks make sense relative to their "
-            "price. If the anomaly tool returns no alerts, say plainly "
-            "whether that's because nothing unusual happened or because "
-            "there isn't enough history yet — don't blur the two "
-            "together. If the transfer-news tool is unavailable, note "
-            "that plainly too and move on — it's optional context, not a "
-            "blocker."
+            "recent real-world Premier League transfers, and player "
+            "availability/injury news for the most recent season, then "
+            "build a squad recommendation with a budget of £{budget}m and "
+            "a chip-timing strategy (Wildcard, Free Hit, Triple Captain, "
+            "Bench Boost) for that squad. Summarize your findings "
+            "clearly, including WHY specific picks make sense relative to "
+            "their price. If the anomaly tool returns no alerts, say "
+            "plainly whether that's because nothing unusual happened or "
+            "because there isn't enough history yet — don't blur the two "
+            "together. If the transfer-news, availability, or chip-timing "
+            "tools are unavailable, note that plainly too and move on — "
+            "they're optional enrichments, not blockers, except the squad "
+            "recommendation itself which is the core deliverable."
         ),
         expected_output=(
             "A structured summary covering: (1) notable price "
@@ -349,9 +482,12 @@ def build_crew(budget: float = 100.0) -> Crew:
             "anomaly alerts (player-specific price/demand moves well "
             "outside that player's own normal range) and, if none, which "
             "of the two honest reasons why, (4) any recent real-world "
-            "transfers worth knowing about, (5) the recommended 15-player "
+            "transfers worth knowing about, (5) notable injury/doubt news "
+            "affecting well-known players, (6) the recommended 15-player "
             "squad with total predicted points and total cost, with brief "
-            "reasoning for a few standout picks."
+            "reasoning for a few standout picks, and (7) the recommended "
+            "gameweek to play each of the four chips this half-season, "
+            "with a one-line reason for each."
         ),
         agent=analyst_agent,
         context=[ingest_task],
@@ -360,17 +496,21 @@ def build_crew(budget: float = 100.0) -> Crew:
     report_task = Task(
         description=(
             "Turn the analyst's findings into a short narrative report "
-            "(a headline, then 3-5 short paragraphs) for a fantasy "
-            "manager deciding their transfers this gameweek. Lead with "
-            "the recommended squad's overall shape and budget, then the "
+            "(a headline, then paragraphs) for a fantasy manager deciding "
+            "their transfers and chip plays this gameweek. Lead with the "
+            "recommended squad's overall shape and budget, then the "
             "standout picks and why, then the notable price/demand "
             "movers, then any anomaly alerts as a short 'watch list' — "
             "and if there are none, say plainly whether that's because "
             "nothing unusual happened or because there isn't enough "
             "history yet to tell, exactly as the analyst reported it — "
-            "then close with any recent real-world transfers worth "
-            "knowing about. Stay strictly grounded in the analyst's "
-            "numbers — never invent a reason they didn't give."
+            "then any notable injury/doubt news (being careful to say "
+            "'doubtful' when the analyst said doubtful, not 'ruled out'), "
+            "then the chip-timing recommendation for all four chips with "
+            "the analyst's stated reasoning, and close with any recent "
+            "real-world transfers worth knowing about. Stay strictly "
+            "grounded in the analyst's numbers — never invent a reason "
+            "they didn't give."
         ),
         expected_output="A short markdown report, ready to read as-is.",
         agent=report_agent,

@@ -12,7 +12,7 @@ Four stages, one trigger:
 
 1. **Ingest Agent** — extracts and cleans raw match/price data
 2. **SQLite store** — clean, versioned tables
-3. **Analyst Agent** — trend analysis, points forecasting, squad optimization, anomaly/spike scoring
+3. **Analyst Agent** — trend analysis, points forecasting, squad optimization, anomaly/spike scoring, chip-timing strategy, and player availability
 4. **Report Agent** — turns the analyst's findings, recommended squad, and anomaly flags into a written narrative report
 
 A Streamlit dashboard reads the same metrics for interactive exploration.
@@ -31,6 +31,12 @@ Goes one step past most student analytics projects: it doesn't just describe wha
 
 **Historical vs. live — two sources, two jobs.** Neither community archive above has the current season yet (checked directly: `vaastav` stops at 2025-26, FPL-Core-Insights documents up to 2025/26). That's fine, because they're doing a different job than live data would: `src/ingest.py` loads finished historical seasons so `forecast_points()` has something to be trained and checked against. `src/live_ingest.py` pulls this season's actual current prices straight from the official FPL API (`bootstrap-static`) — the only source that's ever truly current, since it *is* the source. Run `python -m src.live_ingest` and it appends one snapshot to the same `prices` table; run it again next gameweek and it adds another, gradually building this season's own time series the same way the historical archives were built, one gameweek at a time. This is what the pipeline's recurring trigger ("run before each gameweek deadline") actually does once Phase 3 wires it in — and it's how `recommend_squad()` ends up picking from *this season's* real prices, not last season's.
 
+## Chip strategy & availability
+
+FPL managers get eight chips across the season — two each of Wildcard, Free Hit, Triple Captain, and Bench Boost — split into a first-half set (usable through the Gameweek 19 deadline) and a fresh second-half set from Gameweek 20 onward; unused first-half chips expire rather than rolling over. `recommend_chip_strategy()` (`src/analysis.py`) times each chip within whichever half is currently active, using FPL's own real Fixture Difficulty Rating and blank/double-gameweek detection (`src/fixtures.py`) applied to the current recommended squad's `forecast_points()` baseline: Triple Captain and Bench Boost target the best single-gameweek peak (rewarded by an easy fixture or a double), Free Hit targets the worst *isolated* one-week dip, and Wildcard targets the start of the worst *sustained* multi-gameweek trough — different chips solve different problems, so they're timed off different signals rather than all picking the same "worst gameweek."
+
+Team news (who's injured, who's just a rotation doubt) feeds this the same honest way the rest of the project sources data: not scraped from news sites — the official FPL API already carries each player's status, a free-text news note, and a chance-of-playing percentage (`src/availability.py`). `recommend_squad()` uses it to exclude genuinely injured/suspended/unavailable players from consideration by default, while treating "doubtful" as a real but partial risk rather than an exclusion.
+
 ## Status
 
 - [x] Dataset track chosen — Track A: FPL price market
@@ -41,7 +47,10 @@ Goes one step past most student analytics projects: it doesn't just describe wha
 - [x] Anomaly detection wired in (`anomaly_scores()` — per-player rolling z-score on price change and transfer swings, wired into the crew as a new tool; verified with synthetic tests and a real Colab run — correctly reports 'not enough history yet' this early in 2026-27 instead of fabricating a result)
 - [x] Squad optimizer wired in (`recommend_squad()` — verified against real data, matches deployed dashboard output)
 - [x] Recent transfer tracking wired in (`src/transfers.py` — real Premier League transfers from a weekly-refreshed Transfermarkt dataset, wired into the crew as context for the analyst/report agents; verified with synthetic tests and a real Colab run against live data — two known, documented limitations: subsequent loan moves can lag the parent-club record, and the upstream snapshot can be missing individual transfers outright. Quantified this second one by manually cross-checking all 170 real summer-2026 arrivals across all 20 PL clubs against Transfermarkt directly: 94.1% (160/170) were captured, with the 10 misses concentrated in lower-profile academy signings — a real but small completeness gap, not a systemic one)
+- [x] Player availability tracking wired in (`src/availability.py` — injury/doubt/suspension status straight from FPL's own official data, no news scraping; `recommend_squad()` now excludes injured/suspended/unavailable players by default, degrading gracefully if no availability snapshot has been ingested yet; verified with a real-SQLite-db test — confirmed an injured player is actually excluded from the optimizer's pool, and that the pipeline still runs fine with the feature absent)
+- [x] Chip-timing strategy wired in (`recommend_chip_strategy()` — recommends which upcoming gameweek to play each of the season's four chips (Wildcard, Free Hit, Triple Captain, Bench Boost) for the current recommended squad, using FPL's own real fixture difficulty rating and blank/double-gameweek detection from `src/fixtures.py`; respects the real GW19/20 chip-half boundary. Verified with synthetic double-gameweek/blank-gameweek/sustained-trough scenarios, including a caught-and-fixed edge case where a gameweek missing from the fixture feed entirely was initially indistinguishable from every team having a real blank that week)
 - [x] Deployed — live at https://pitchpulse-bs7uhkkyuchigcpnxupi29.streamlit.app/
+- [ ] Player availability, chip strategy, and the new crew tools verified against real live data in Colab (built and tested with synthetic + real-db data only so far — this sandbox can't reach the live FPL API to check field names directly)
 - [ ] Demo recorded
 
 ## Setup
@@ -63,8 +72,10 @@ src/ingest.py      # historical raw files -> clean SQLite tables
 src/live_ingest.py # this season's live snapshot, straight from the official FPL API
 src/bootstrap.py   # one-call ensure_data(): downloads + ingests + snapshots — what the deployed dashboard runs on a fresh checkout
 src/db.py          # SQLite connection helper
-src/analysis.py    # trend, points forecast, squad optimizer (PuLP), anomaly-score functions
+src/analysis.py    # trend, points forecast, squad optimizer (PuLP), anomaly scores, chip-timing strategy
 src/transfers.py   # recent Premier League transfers from a real Transfermarkt-sourced dataset
+src/availability.py # injury/doubt/suspension status, straight from FPL's own official data
+src/fixtures.py    # fixture list + FPL's own difficulty rating; blank/double-gameweek detection
 src/agents/crew.py # CrewAI pipeline: Ingest -> Analyst -> Report agents
 dashboard/app.py   # Streamlit + Plotly dashboard (season-safe trends + squad recommendation)
 reports/           # generated narrative reports land here

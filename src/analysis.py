@@ -27,9 +27,13 @@ Phase 2: price_trend() / demand_signal() just need to return DataFrames
 the dashboard can plot. Phase 4 adds the predictive layer — forecast_points()
 and anomaly_scores(). Phase 5 adds the prescriptive layer — recommend_squad(),
 which turns forecast_points()'s output into an actual pick under real
-constraints. Together these four functions are what the Analyst Agent
-wraps as CrewAI tools in Phase 3, and their output is the "findings +
-flags" the Report Agent narrates in the pipeline diagram.
+constraints. Phase 6 extends the prescriptive layer two ways:
+recommend_squad() now excludes injured/suspended players by default
+(src/availability.py), and recommend_chip_strategy() times the season's
+four chip types against real fixture data (src/fixtures.py). Together
+these functions are what the Analyst Agent wraps as CrewAI tools in
+Phase 3, and their output is the "findings + flags" the Report Agent
+narrates in the pipeline diagram.
 """
 
 import pandas as pd
@@ -218,6 +222,7 @@ def recommend_squad(
     squad_size: dict | None = None,
     max_per_team: int = 3,
     df: pd.DataFrame | None = None,
+    exclude_unavailable: bool = True,
 ) -> tuple[pd.DataFrame, str]:
     """Phase 5: the prescriptive layer — pick the 15 players that maximize
     total predicted points without breaking real FPL squad rules.
@@ -243,6 +248,19 @@ def recommend_squad(
     exactly the bug that made an earlier version of this function
     recommend players by their 2023-24/2024-25 club instead of today's.
 
+    `exclude_unavailable` (Phase 6, default True): drops anyone whose
+    latest known status (src/availability.py) is injured, suspended,
+    unavailable, or not considered for selection, plus anyone flagged
+    at exactly 0% chance of playing next round. Doubtful players ('d'
+    status, partial chance-of-playing) are deliberately kept in the
+    pool rather than dropped — a real but partial risk isn't the same
+    as "don't pick this player at all," and forecast_points()'s own
+    rolling average already reflects reduced minutes for someone who's
+    been managed carefully. Degrades gracefully to the old behavior
+    (no filtering) if no availability data has been ingested yet — this
+    is a real improvement when the data exists, not a hard requirement,
+    same spirit as src/transfers.py's optional enrichments.
+
     Returns (squad_dataframe, solver_status). Check solver_status == "Optimal"
     before trusting the result — "Infeasible" means the constraints can't
     all be satisfied (e.g. budget too low for the position requirements).
@@ -261,6 +279,23 @@ def recommend_squad(
         .drop_duplicates(subset=["code"])
         .copy()
     )
+
+    if exclude_unavailable:
+        from src.availability import UNAVAILABLE_STATUSES, latest_availability
+
+        try:
+            avail = latest_availability()
+        except RuntimeError:
+            avail = None  # no availability data ingested yet — skip the filter
+        if avail is not None and not avail.empty:
+            unavailable_codes = set(
+                avail[
+                    avail["status"].isin(UNAVAILABLE_STATUSES)
+                    | (avail["chance_of_playing_next_round"] == 0)
+                ]["code"]
+            )
+            pool = pool[~pool["code"].isin(unavailable_codes)]
+
     if pool.empty:
         raise ValueError(
             "No players with a predicted_points value at the latest gameweek — "
@@ -288,7 +323,7 @@ def recommend_squad(
     status = prob.solve(pulp.PULP_CBC_CMD(msg=False))
 
     chosen = [i for i in pool.index if picks[i].value() == 1]
-    squad = pool.loc[chosen, ["name", "team", "position", "price_m", "predicted_points"]]
+    squad = pool.loc[chosen, ["code", "name", "team", "position", "price_m", "predicted_points"]]
     squad = squad.sort_values(["position", "predicted_points"], ascending=[True, False])
     return squad, pulp.LpStatus[status]
 
@@ -396,3 +431,223 @@ def anomaly_scores(
 
     result = pd.concat(alerts, ignore_index=True)
     return result.reindex(result["z_score"].abs().sort_values(ascending=False).index).reset_index(drop=True)
+
+
+def player_availability(codes: list | None = None) -> pd.DataFrame:
+    """Phase 6: current injury/suspension/doubt status per player, from
+    src/availability.py's latest snapshot. `codes` optionally filters to
+    a specific set of player codes (e.g. a recommended squad) rather
+    than every player in the league. Raises RuntimeError if no
+    availability data has been ingested yet — same contract as
+    latest_availability() itself.
+    """
+    from src.availability import latest_availability
+
+    df = latest_availability()
+    if codes is not None and not df.empty:
+        df = df[df["code"].isin(codes)]
+    return df
+
+
+def _fixture_easiness_factor(avg_difficulty: float) -> float:
+    """FPL's own Fixture Difficulty Rating runs 1 (easiest) to 5
+    (hardest). Converted here to a symmetric multiplier centered on 1.0
+    at the middle rating (3), so a squad's baseline predicted_points is
+    scaled up for easy fixtures and down for hard ones. This is an
+    explainable adjustment, not a fitted model — same "start simple,
+    explain in one sentence" philosophy as forecast_points()'s rolling
+    average — capped so one extreme rating can't swing a projection to
+    an implausible multiple.
+    """
+    factor = (6 - avg_difficulty) / 3
+    return max(0.3, min(1.7, factor))
+
+
+def recommend_chip_strategy(
+    squad_codes: list,
+    current_gameweek: int,
+    team_fixtures: pd.DataFrame,
+    horizon: int = 8,
+    bench_size: int = 4,
+    df: pd.DataFrame | None = None,
+) -> dict:
+    """Phase 6: recommend which upcoming gameweek to play each of the
+    season's four chips, for a given squad.
+
+    FPL's real chip rules, which this respects: two of each chip
+    (Wildcard, Free Hit, Triple Captain, Bench Boost), one set usable in
+    the first half of the season (gameweeks 1-19) and a separate fresh
+    set from gameweek 20 onward — unused first-half chips expire rather
+    than carrying over. This function only ever recommends gameweeks
+    inside whichever half `current_gameweek` currently falls in (and
+    only from `current_gameweek` onward within it) — it won't suggest a
+    gameweek that's already passed, or one in a half you can't reach
+    with this half's chips.
+
+    The core signal: each squad player's forecast_points() baseline
+    (their own rolling average — this function doesn't build a new
+    predictive model) adjusted, per candidate gameweek, by that
+    player's real team's fixture(s) that week — FPL's own difficulty
+    rating (via _fixture_easiness_factor) and fixture COUNT (0 for a
+    blank gameweek, 1 normally, 2 for a double). That adjusted number is
+    what actually varies week to week; the four chips are then timed
+    off different views of it:
+
+    - Triple Captain: the gameweek where your single best-forecasted
+      player's adjusted points peak (rewarded by an easy fixture or,
+      especially, a double).
+    - Bench Boost: the gameweek where your bench specifically (the
+      `bench_size` squad members with the lowest predicted_points, used
+      as a proxy for who'd actually be benched — recommend_squad()'s
+      output has no literal starting-11 of its own) has its highest
+      combined adjusted total.
+    - Free Hit: the single worst ISOLATED gameweek — a dip relative to
+      the gameweeks around it. Free Hit only fixes one week before your
+      real squad reverts, so it's wasted on anything but a one-off
+      trough (a lone blank gameweek, a one-week bad patch).
+    - Wildcard: the START of the worst SUSTAINED stretch — a multi-
+      gameweek trough, since a wildcard rebuilds your squad for good,
+      so its payoff compounds over several weeks rather than one.
+
+    Requires real fixture data — pass in
+    src.fixtures.load_team_fixtures()'s output as `team_fixtures`, since
+    price/points data alone doesn't carry which gameweek each team
+    actually plays.
+
+    Returns a dict with one entry per chip (gameweek + a short reason)
+    plus which half of the season this is scoped to and the plain-
+    English methodology, so a caller (or the Report Agent) can explain
+    the reasoning, not just print a gameweek number. Treat this as a
+    starting point for your own judgement, not a guarantee — it's an
+    explainable heuristic over real data, not a fitted model, and it
+    can't see team news that hasn't happened yet (a player picking up
+    an injury next week isn't reflected here until src/availability.py's
+    next snapshot).
+    """
+    df = forecast_points(df=df) if df is None else df
+    _require_season_column(df)
+    _require_code_column(df)
+
+    if team_fixtures is None or team_fixtures.empty:
+        raise ValueError(
+            "No fixture data given — call src.fixtures.load_team_fixtures() "
+            "first and pass its result in as `team_fixtures`."
+        )
+
+    latest_season = df["season"].max()
+    season_df = df[df["season"] == latest_season]
+    latest_gw = season_df["gameweek"].max()
+    squad = (
+        season_df[season_df["gameweek"] == latest_gw]
+        .drop_duplicates(subset=["code"])
+        .set_index("code")
+        .reindex(squad_codes)[["name", "team", "position", "predicted_points"]]
+    )
+    missing = squad[squad["name"].isna()].index.tolist()
+    squad = squad.dropna(subset=["name"])
+    if squad.empty:
+        raise ValueError(
+            "None of the given squad_codes matched a player with a current "
+            "predicted_points value — check the codes came from this same "
+            "season's forecast_points() output."
+        )
+
+    half_end = 19 if current_gameweek <= 19 else 38
+    half_start = 1 if current_gameweek <= 19 else 20
+    requested_gws = list(
+        range(max(current_gameweek, half_start), min(half_end, current_gameweek + horizon) + 1)
+    )
+    # A gameweek with literally zero rows anywhere in team_fixtures means
+    # the fixture list doesn't cover it yet (postponements not
+    # re-slotted, or a horizon reaching past what's been published) —
+    # that's "no data," not "every team blank," and must NOT be treated
+    # as a real trough/dip (every squad member would score 0 there
+    # purely from missing data, which would wrongly look like the worst
+    # possible gameweek to both Free Hit and Wildcard). Dropped from the
+    # candidates entirely rather than silently scored as a blank.
+    known_gws = set(team_fixtures["gameweek"].unique())
+    candidate_gws = [gw for gw in requested_gws if gw in known_gws]
+    unknown_gws = [gw for gw in requested_gws if gw not in known_gws]
+
+    result = {
+        "half": "first (GW1-19)" if half_end == 19 else "second (GW20-38)",
+        "horizon_gameweeks": candidate_gws,
+    }
+    if missing:
+        result["skipped_codes"] = missing
+    if unknown_gws:
+        result["gameweeks_without_fixture_data"] = unknown_gws
+    if not candidate_gws:
+        result["note"] = (
+            "No upcoming gameweeks in the current chip half have fixture data "
+            "to plan around yet."
+        )
+        return result
+
+    bench_codes = set(squad.sort_values("predicted_points").head(bench_size).index)
+
+    gw_rows = []
+    for gw in candidate_gws:
+        adj_points = {}
+        for code, row in squad.iterrows():
+            tf_row = team_fixtures[
+                (team_fixtures["team"] == row["team"]) & (team_fixtures["gameweek"] == gw)
+            ]
+            fixture_count = int(tf_row["fixture_count"].iloc[0]) if not tf_row.empty else 0
+            avg_diff = float(tf_row["avg_difficulty"].iloc[0]) if not tf_row.empty else None
+            factor = _fixture_easiness_factor(avg_diff) if avg_diff is not None else 0.0
+            adj_points[code] = row["predicted_points"] * factor * fixture_count
+        gw_rows.append({
+            "gameweek": gw,
+            "squad_total": sum(adj_points.values()),
+            "bench_total": sum(v for c, v in adj_points.items() if c in bench_codes),
+            "best_code": max(adj_points, key=adj_points.get),
+            "best_points": max(adj_points.values()),
+        })
+    gw_df = pd.DataFrame(gw_rows).set_index("gameweek")
+
+    bench_boost_gw = int(gw_df["bench_total"].idxmax())
+    triple_captain_gw = int(gw_df["best_points"].idxmax())
+    best_captain_name = squad.loc[gw_df.loc[triple_captain_gw, "best_code"], "name"]
+
+    # Free Hit: worst ISOLATED dip — squad_total below the average of its
+    # immediate neighbours in the horizon.
+    rolling_avg = gw_df["squad_total"].rolling(3, center=True, min_periods=1).mean()
+    free_hit_gw = int((rolling_avg - gw_df["squad_total"]).idxmax())
+
+    # Wildcard: start of the worst SUSTAINED trough — a multi-gameweek
+    # rolling average at its lowest point in the horizon.
+    trough_window = min(4, len(gw_df))
+    trough_avg = gw_df["squad_total"].rolling(trough_window).mean()
+    if trough_avg.notna().any():
+        window_end = int(trough_avg.idxmin())
+        wildcard_gw = max(gw_df.index.min(), window_end - trough_window + 1)
+    else:
+        wildcard_gw = gw_df.index.min()
+
+    result.update({
+        "bench_boost": {
+            "gameweek": bench_boost_gw,
+            "expected_bench_points": round(gw_df.loc[bench_boost_gw, "bench_total"], 1),
+        },
+        "triple_captain": {
+            "gameweek": triple_captain_gw,
+            "player": best_captain_name,
+            "expected_points": round(gw_df.loc[triple_captain_gw, "best_points"], 1),
+        },
+        "free_hit": {
+            "gameweek": free_hit_gw,
+            "reason": "Biggest isolated one-week dip in the horizon.",
+        },
+        "wildcard": {
+            "gameweek": int(wildcard_gw),
+            "reason": f"Start of the worst {trough_window}-gameweek stretch in the horizon.",
+        },
+        "methodology": (
+            "predicted_points (forecast_points()'s rolling per-player baseline) "
+            "adjusted per gameweek by FPL's own fixture difficulty rating and "
+            "fixture count (0 for a blank, 2 for a double) — an explainable "
+            "heuristic, not a fitted model."
+        ),
+    })
+    return result
