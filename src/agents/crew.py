@@ -206,14 +206,18 @@ def recommend_squad_tool(budget: float = 100.0) -> str:
     (budget, exact position counts, max 3 players per club). Excludes
     injured/suspended/unavailable players by default (whenever
     availability data has been ingested — see the availability tool).
-    Returns the squad, total predicted points, total cost, and solver
-    status as text.
+    Returns the squad, total predicted points, total cost, solver
+    status, and a one-line reason for each pick (Phase 7 — see
+    src.analysis.explain_squad_picks) as text, so the Report Agent can
+    explain *why* each player made the squad, not just list them.
     """
-    from src.analysis import recommend_squad
+    from src.analysis import explain_squad_picks, recommend_squad
 
     squad, status = recommend_squad(budget=budget)
     if status != "Optimal":
         return f"Solver status: {status} — no feasible squad at this budget."
+
+    explained = explain_squad_picks(squad, budget=budget)
 
     lines = [
         f"Solver status: {status}",
@@ -221,11 +225,12 @@ def recommend_squad_tool(budget: float = 100.0) -> str:
         f"Total cost: £{squad['price_m'].sum():.1f}m",
         "",
     ]
-    ordered = squad.sort_values(["position", "predicted_points"], ascending=[True, False])
+    ordered = explained.sort_values(["position", "predicted_points"], ascending=[True, False])
     for _, row in ordered.iterrows():
         lines.append(
             f"  {row['position']} {row['name']} ({row['team']}) — "
-            f"£{row['price_m']:.1f}m, {row['predicted_points']:.1f} predicted pts"
+            f"£{row['price_m']:.1f}m, {row['predicted_points']:.1f} predicted pts. "
+            f"Why: {row['reason']}"
         )
     return "\n".join(lines)
 
@@ -499,7 +504,9 @@ def build_crew(budget: float = 100.0) -> Crew:
             "(a headline, then paragraphs) for a fantasy manager deciding "
             "their transfers and chip plays this gameweek. Lead with the "
             "recommended squad's overall shape and budget, then the "
-            "standout picks and why, then the notable price/demand "
+            "standout picks with the analyst's stated 'Why:' reason for "
+            "each one (verbatim in substance — never invent a different "
+            "reason than the one the tool gave), then the notable price/demand "
             "movers, then any anomaly alerts as a short 'watch list' — "
             "and if there are none, say plainly whether that's because "
             "nothing unusual happened or because there isn't enough "

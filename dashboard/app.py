@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import streamlit as st
 import plotly.express as px
 
-from src.analysis import price_trend, demand_signal, recommend_squad, list_seasons
+from src.analysis import price_trend, demand_signal, recommend_squad, explain_squad_picks, list_seasons
 
 st.set_page_config(page_title="PitchPulse", page_icon="⚽", layout="wide")
 
@@ -121,13 +121,26 @@ with tab_squad:
             col2.metric("Total predicted points", f"{squad['predicted_points'].sum():.1f}")
             col3.metric("Total cost", f"£{squad['price_m'].sum():.1f}m")
 
+            try:
+                explained = explain_squad_picks(squad, budget=budget)
+            except Exception:
+                # Explanation is an add-on, not a dependency — if it ever
+                # fails for some reason, still show the squad itself.
+                explained = squad.assign(reason="—")
+
             for pos, label in [("GK", "Goalkeepers"), ("DEF", "Defenders"), ("MID", "Midfielders"), ("FWD", "Forwards")]:
-                pos_df = squad[squad["position"] == pos].sort_values("predicted_points", ascending=False)
+                pos_df = explained[explained["position"] == pos].sort_values("predicted_points", ascending=False)
                 if not pos_df.empty:
                     st.markdown(f"**{label}**")
                     st.dataframe(
-                        pos_df[["name", "team", "price_m", "predicted_points"]].rename(
-                            columns={"name": "Player", "team": "Club", "price_m": "Price (£m)", "predicted_points": "Predicted points"}
+                        pos_df[["name", "team", "price_m", "predicted_points", "reason"]].rename(
+                            columns={
+                                "name": "Player",
+                                "team": "Club",
+                                "price_m": "Price (£m)",
+                                "predicted_points": "Predicted points",
+                                "reason": "Why this pick",
+                            }
                         ),
                         hide_index=True,
                         width="stretch",

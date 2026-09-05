@@ -217,6 +217,144 @@ def forecast_points(window: int = 5, df: pd.DataFrame | None = None) -> pd.DataF
     return df
 
 
+def _build_candidate_pool(
+    df: pd.DataFrame | None = None,
+    exclude_unavailable: bool = True,
+) -> pd.DataFrame:
+    """Shared by recommend_squad() and explain_squad_picks(): the exact
+    same 'what could the optimizer have picked' pool, built once so the
+    two functions can never silently drift out of sync with each other
+    (an explanation is only honest if it's checked against the same
+    candidates the optimizer actually saw).
+
+    Latest-season/latest-gameweek filtering, dedup, and the Phase 6
+    availability exclusion all live here now — recommend_squad()'s own
+    docstring above still describes the full reasoning for each step.
+    """
+    df = forecast_points(df=df) if df is None else df
+    _require_season_column(df)
+    _require_code_column(df)
+
+    latest_season = df["season"].max()  # "2026-27" > "2024-25" sorts correctly as strings
+    season_df = df[df["season"] == latest_season]
+    latest_gw = season_df["gameweek"].max()
+    pool = (
+        season_df[season_df["gameweek"] == latest_gw]
+        .dropna(subset=["predicted_points"])
+        .drop_duplicates(subset=["code"])
+        .copy()
+    )
+
+    if exclude_unavailable:
+        from src.availability import UNAVAILABLE_STATUSES, latest_availability
+
+        try:
+            avail = latest_availability()
+        except RuntimeError:
+            avail = None  # no availability data ingested yet — skip the filter
+        if avail is not None and not avail.empty:
+            unavailable_codes = set(
+                avail[
+                    avail["status"].isin(UNAVAILABLE_STATUSES)
+                    | (avail["chance_of_playing_next_round"] == 0)
+                ]["code"]
+            )
+            pool = pool[~pool["code"].isin(unavailable_codes)]
+
+    if pool.empty:
+        raise ValueError(
+            "No players with a predicted_points value at the latest gameweek — "
+            "run forecast_points() first, or check the 'window' has enough history."
+        )
+
+    return pool
+
+
+def explain_squad_picks(
+    squad: pd.DataFrame,
+    budget: float = 100.0,
+    max_per_team: int = 3,
+    df: pd.DataFrame | None = None,
+    exclude_unavailable: bool = True,
+) -> pd.DataFrame:
+    """Phase 7: a one-sentence, checkable reason for every pick in a
+    recommend_squad() result — not a vibe, an actual constraint check
+    against the same candidate pool the optimizer solved over.
+
+    For each picked player, two things are true simultaneously in an
+    *optimal* ILP solve: either they're the highest predicted_points
+    option in their position, or every higher-scoring alternative in
+    that position was genuinely infeasible to swap in (would break the
+    budget or the max-3-per-club rule) — because if a higher-scoring
+    swap were both available AND legal, an optimal solver would have
+    already taken it instead. So rather than guess at a plausible-
+    sounding reason, this actually simulates the single-swap the
+    reader would ask about ("why not the better player?") and reports
+    whichever of those two things is true.
+
+    The rare fallback branch (neither condition holds) exists only for
+    a non-optimal solver status or a squad built outside recommend_squad()
+    itself; it says so honestly instead of fabricating a specific reason.
+
+    Returns `squad` with one new column, 'reason'. Doesn't mutate the
+    input.
+    """
+    pool = _build_candidate_pool(df=df, exclude_unavailable=exclude_unavailable)
+    picked_codes = set(squad["code"])
+    team_counts = squad["team"].value_counts().to_dict()
+    total_cost = squad["price_m"].sum()
+
+    reasons = []
+    for _, row in squad.iterrows():
+        pos, name, price, points = row["position"], row["name"], row["price_m"], row["predicted_points"]
+        pos_pool = pool[pool["position"] == pos].sort_values("predicted_points", ascending=False)
+        pool_size = len(pos_pool)
+        unpicked = pos_pool[~pos_pool["code"].isin(picked_codes)]
+
+        if unpicked.empty or points >= unpicked.iloc[0]["predicted_points"]:
+            reason = (
+                f"Highest predicted points among the {pool_size} available "
+                f"{pos}s at £{price:.1f}m."
+            )
+        else:
+            alt = unpicked.iloc[0]
+            new_cost = total_cost - price + alt["price_m"]
+            temp_counts = dict(team_counts)
+            temp_counts[row["team"]] = temp_counts.get(row["team"], 0) - 1
+            temp_counts[alt["team"]] = temp_counts.get(alt["team"], 0) + 1
+
+            if new_cost > budget + 1e-9:
+                reason = (
+                    f"{alt['name']} scored higher ({alt['predicted_points']:.1f} vs "
+                    f"{points:.1f} pts) but swapping them in would have pushed the "
+                    f"squad £{new_cost - budget:.1f}m over the £{budget:.0f}m budget."
+                )
+            elif temp_counts[alt["team"]] > max_per_team:
+                reason = (
+                    f"{alt['name']} scored higher ({alt['predicted_points']:.1f} vs "
+                    f"{points:.1f} pts) but adding them would have taken "
+                    f"{alt['team']} beyond the {max_per_team}-per-club limit."
+                )
+            else:
+                # An optimal solver shouldn't leave a legal, strictly-better
+                # single swap on the table — reaching this branch most
+                # likely means the solver status wasn't "Optimal", or
+                # `squad` didn't come from this module's own
+                # recommend_squad(). Say so rather than inventing a
+                # constraint reason we haven't actually verified.
+                reason = (
+                    f"Part of the highest-scoring combination found within budget and "
+                    f"squad rules, though {alt['name']} ({alt['predicted_points']:.1f} pts) "
+                    f"was also available in this position — check the solver status if "
+                    f"this looks off."
+                )
+        reasons.append(reason)
+
+    result = squad.copy()
+    result["reason"] = reasons
+    return result
+
+
 def recommend_squad(
     budget: float = 100.0,
     squad_size: dict | None = None,
@@ -266,41 +404,7 @@ def recommend_squad(
     all be satisfied (e.g. budget too low for the position requirements).
     """
     squad_size = squad_size or {"GK": 2, "DEF": 5, "MID": 5, "FWD": 3}
-    df = forecast_points(df=df) if df is None else df
-    _require_season_column(df)
-    _require_code_column(df)
-
-    latest_season = df["season"].max()  # "2026-27" > "2024-25" sorts correctly as strings
-    season_df = df[df["season"] == latest_season]
-    latest_gw = season_df["gameweek"].max()
-    pool = (
-        season_df[season_df["gameweek"] == latest_gw]
-        .dropna(subset=["predicted_points"])
-        .drop_duplicates(subset=["code"])
-        .copy()
-    )
-
-    if exclude_unavailable:
-        from src.availability import UNAVAILABLE_STATUSES, latest_availability
-
-        try:
-            avail = latest_availability()
-        except RuntimeError:
-            avail = None  # no availability data ingested yet — skip the filter
-        if avail is not None and not avail.empty:
-            unavailable_codes = set(
-                avail[
-                    avail["status"].isin(UNAVAILABLE_STATUSES)
-                    | (avail["chance_of_playing_next_round"] == 0)
-                ]["code"]
-            )
-            pool = pool[~pool["code"].isin(unavailable_codes)]
-
-    if pool.empty:
-        raise ValueError(
-            "No players with a predicted_points value at the latest gameweek — "
-            "run forecast_points() first, or check the 'window' has enough history."
-        )
+    pool = _build_candidate_pool(df=df, exclude_unavailable=exclude_unavailable)
 
     prob = pulp.LpProblem("PitchPulse_Squad", pulp.LpMaximize)
     picks = pulp.LpVariable.dicts("pick", pool.index, cat="Binary")
